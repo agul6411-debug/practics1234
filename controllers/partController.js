@@ -1,9 +1,8 @@
 const partModel = require('../models/partModel');
 const vendorModel = require('../models/vendorModel');
-const { generateQrToken } = require('../utils/qrToken');
 
 /**
- * Add a new part (Vendor only)
+ * Add a new part (Vendor only, expects multipart/form-data)
  */
 async function addPart(req, res, next) {
   try {
@@ -21,27 +20,37 @@ async function addPart(req, res, next) {
       });
     }
 
-    const { brand_id, part_type_id, model_name, price, condition_type, stock_quantity, image_url } = req.body;
+    const { brand_id, part_type_id, model_name, price, condition_type, stock_quantity, barcode_number } = req.body;
 
-    if (!brand_id || !part_type_id || !model_name || !price || !condition_type) {
+    if (!brand_id || !part_type_id || !model_name || !price || !condition_type || !barcode_number) {
       res.status(400);
-      throw new Error('Required fields missing: brand_id, part_type_id, model_name, price, condition_type');
+      throw new Error('Required fields missing: brand_id, part_type_id, model_name, price, condition_type, barcode_number');
     }
+
+    if (!req.files || !req.files['originalPhoto'] || !req.files['barcodePhoto']) {
+      res.status(400);
+      throw new Error('Required authenticity files missing: originalPhoto and barcodePhoto must be uploaded');
+    }
+
+    const originalPhotoFile = req.files['originalPhoto'][0];
+    const barcodePhotoFile = req.files['barcodePhoto'][0];
+
+    const original_photo_url = `/uploads/parts/${originalPhotoFile.filename}`;
+    const barcode_photo_url = `/uploads/parts/${barcodePhotoFile.filename}`;
 
     const partId = await partModel.createPart({
       vendor_id: vendor.id,
-      brand_id,
-      part_type_id,
+      brand_id: parseInt(brand_id, 10),
+      part_type_id: parseInt(part_type_id, 10),
       model_name,
-      price,
+      price: parseFloat(price),
       condition_type,
-      stock_quantity: stock_quantity !== undefined ? stock_quantity : 1,
-      image_url
+      stock_quantity: stock_quantity !== undefined ? parseInt(stock_quantity, 10) : 1,
+      image_url: original_photo_url,
+      barcode_number,
+      original_photo_url,
+      barcode_photo_url
     });
-
-    // Generate tamper-proof QR token and store it
-    const qrToken = generateQrToken(partId);
-    await partModel.setQrToken(partId, qrToken);
 
     const createdPart = await partModel.getPartById(partId);
 
@@ -105,16 +114,29 @@ async function updatePart(req, res, next) {
       });
     }
 
-    const { price, stock_quantity, condition_type, status, image_url, model_name } = req.body;
+    const { price, stock_quantity, condition_type, status, model_name, barcode_number } = req.body;
 
-    await partModel.updatePart(partId, {
-      price,
-      stock_quantity,
-      condition_type,
-      status,
-      image_url,
-      model_name
-    });
+    const fieldsToUpdate = {};
+    if (price !== undefined) fieldsToUpdate.price = parseFloat(price);
+    if (stock_quantity !== undefined) fieldsToUpdate.stock_quantity = parseInt(stock_quantity, 10);
+    if (condition_type !== undefined) fieldsToUpdate.condition_type = condition_type;
+    if (status !== undefined) fieldsToUpdate.status = status;
+    if (model_name !== undefined) fieldsToUpdate.model_name = model_name;
+    if (barcode_number !== undefined) fieldsToUpdate.barcode_number = barcode_number;
+
+    if (req.files) {
+      if (req.files['originalPhoto']) {
+        const file = req.files['originalPhoto'][0];
+        fieldsToUpdate.original_photo_url = `/uploads/parts/${file.filename}`;
+        fieldsToUpdate.image_url = `/uploads/parts/${file.filename}`;
+      }
+      if (req.files['barcodePhoto']) {
+        const file = req.files['barcodePhoto'][0];
+        fieldsToUpdate.barcode_photo_url = `/uploads/parts/${file.filename}`;
+      }
+    }
+
+    await partModel.updatePart(partId, fieldsToUpdate);
 
     const updatedPart = await partModel.getPartById(partId);
 
@@ -167,48 +189,23 @@ async function deletePart(req, res, next) {
 }
 
 /**
- * Public endpoint to verify part authenticity by scanning QR token
+ * Public detail/verification endpoint (No Auth Required)
  */
-async function verifyPartByToken(req, res, next) {
+async function getPartDetails(req, res, next) {
   try {
-    const token = req.params.token;
-    if (!token) {
-      res.status(400);
-      throw new Error('QR token parameter is required');
-    }
+    const partId = req.params.id;
+    const part = await partModel.getPartPublic(partId);
 
-    const result = await partModel.findByQrToken(token);
-
-    if (!result) {
+    if (!part) {
       return res.status(404).json({
         success: false,
-        message: 'Invalid or fake QR code'
+        message: 'Part not found'
       });
     }
 
     res.json({
       success: true,
-      data: {
-        part: {
-          id: result.id,
-          model_name: result.model_name,
-          brand_name: result.brand_name,
-          part_type_name: result.part_type_name,
-          price: result.price,
-          condition_type: result.condition_type,
-          stock_quantity: result.stock_quantity,
-          image_url: result.image_url,
-          qr_token: result.qr_token,
-          status: result.status,
-          created_at: result.created_at
-        },
-        vendor: {
-          id: result.vendor_id,
-          shop_name: result.shop_name,
-          city: result.vendor_city,
-          address: result.vendor_address
-        }
-      }
+      data: part
     });
   } catch (error) {
     next(error);
@@ -220,5 +217,5 @@ module.exports = {
   getMyParts,
   updatePart,
   deletePart,
-  verifyPartByToken
+  getPartDetails
 };

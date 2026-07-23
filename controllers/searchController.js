@@ -29,7 +29,7 @@ async function executeSearch({ brandId, partTypeId, model, city }) {
 
   const query = `
     SELECT 
-      p.id, p.model_name, p.price, p.condition_type, p.stock_quantity, p.image_url, p.qr_token, p.status, p.created_at,
+      p.id, p.model_name, p.price, p.condition_type, p.stock_quantity, p.image_url, p.original_photo_url, p.barcode_photo_url, p.barcode_number, p.status, p.created_at,
       b.id as brand_id, b.name as brand_name,
       pt.id as part_type_id, pt.name as part_type_name,
       v.id as vendor_id, v.shop_name, v.city as vendor_city, v.address as vendor_address, v.latitude, v.longitude,
@@ -55,11 +55,6 @@ async function executeSearch({ brandId, partTypeId, model, city }) {
 async function searchParts(req, res, next) {
   try {
     const { brandId, partTypeId, model, city } = req.query;
-
-    if (!brandId && !partTypeId && !model && !city) {
-      res.status(400);
-      throw new Error('Please provide at least one search filter (brandId, partTypeId, model, or city)');
-    }
 
     // 1. Initial search (with city filter if provided)
     let results = await executeSearch({ brandId, partTypeId, model, city });
