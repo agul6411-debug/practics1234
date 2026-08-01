@@ -1,6 +1,4 @@
-const customerModel = require('../models/customerModel');
-const requestModel = require('../models/requestModel');
-const reviewModel = require('../models/reviewModel');
+const pool = require('../db');
 
 /**
  * Allows a customer to submit a review for a responded/available request.
@@ -8,7 +6,10 @@ const reviewModel = require('../models/reviewModel');
 async function addReview(req, res, next) {
   try {
     const userId = req.user.id;
-    const customer = await customerModel.findCustomerByUserId(userId);
+
+    // Find customer profile
+    const [custRows] = await pool.execute('SELECT * FROM customers WHERE user_id = ?', [userId]);
+    const customer = custRows[0] || null;
     if (!customer) {
       res.status(404);
       throw new Error('Customer profile not found');
@@ -26,7 +27,9 @@ async function addReview(req, res, next) {
       throw new Error('Rating must be a number between 1 and 5');
     }
 
-    const request = await requestModel.getRequestById(request_id);
+    // Get request by ID
+    const [requestRows] = await pool.execute('SELECT * FROM requests WHERE id = ?', [request_id]);
+    const request = requestRows[0] || null;
     if (!request) {
       res.status(404);
       throw new Error('Request not found');
@@ -49,21 +52,26 @@ async function addReview(req, res, next) {
     }
 
     // Confirm no existing review for this request_id
-    const existingReview = await reviewModel.findReviewByRequestId(request_id);
-    if (existingReview) {
+    const [existingReviewRows] = await pool.execute('SELECT * FROM reviews WHERE request_id = ?', [request_id]);
+    if (existingReviewRows.length > 0) {
       return res.status(400).json({
         success: false,
         message: 'You already reviewed this request'
       });
     }
 
-    const reviewId = await reviewModel.createReview({
-      request_id,
-      customer_id: customer.id,
-      vendor_id: request.vendor_id,
-      rating: numericRating,
-      comment
-    });
+    // Create review
+    const [result] = await pool.execute(
+      'INSERT INTO reviews (request_id, customer_id, vendor_id, rating, comment) VALUES (?, ?, ?, ?, ?)',
+      [
+        request_id,
+        customer.id,
+        request.vendor_id,
+        numericRating,
+        comment || null
+      ]
+    );
+    const reviewId = result.insertId;
 
     res.status(201).json({
       success: true,
@@ -93,7 +101,18 @@ async function getVendorReviews(req, res, next) {
       throw new Error('vendorId parameter is required');
     }
 
-    const reviews = await reviewModel.getReviewsByVendor(vendorId);
+    // Get reviews by vendor
+    const [reviews] = await pool.execute(
+      `SELECT 
+        rv.id, rv.request_id, rv.rating, rv.comment, rv.created_at,
+        u.name as customer_name
+      FROM reviews rv
+      JOIN customers c ON rv.customer_id = c.id
+      JOIN users u ON c.user_id = u.id
+      WHERE rv.vendor_id = ?
+      ORDER BY rv.created_at DESC`,
+      [vendorId]
+    );
 
     let averageRating = 0;
     if (reviews.length > 0) {

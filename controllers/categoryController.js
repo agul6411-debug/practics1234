@@ -1,12 +1,11 @@
-const brandModel = require('../models/brandModel');
-const partTypeModel = require('../models/partTypeModel');
+const pool = require('../db');
 
 /**
  * Public controller to get all brands.
  */
 async function getBrands(req, res, next) {
   try {
-    const brands = await brandModel.getAllBrands();
+    const [brands] = await pool.execute('SELECT * FROM brands ORDER BY name ASC');
     res.json({
       success: true,
       data: brands
@@ -21,7 +20,7 @@ async function getBrands(req, res, next) {
  */
 async function getPartTypes(req, res, next) {
   try {
-    const partTypes = await partTypeModel.getAllPartTypes();
+    const [partTypes] = await pool.execute('SELECT * FROM part_types ORDER BY name ASC');
     res.json({
       success: true,
       data: partTypes
@@ -37,16 +36,16 @@ async function getPartTypes(req, res, next) {
 async function addBrand(req, res, next) {
   try {
     const { name } = req.body;
-    if (!name || name.trim().isEmpty) {
+    if (!name || name.trim() === "") {
       res.status(400);
       throw new Error('Brand name is required');
     }
 
-    const brandId = await brandModel.createBrand(name.trim());
+    const [result] = await pool.execute('INSERT INTO brands (name) VALUES (?)', [name.trim()]);
     res.status(201).json({
       success: true,
       message: 'Brand created successfully',
-      data: { id: brandId, name: name.trim() }
+      data: { id: result.insertId, name: name.trim() }
     });
   } catch (error) {
     next(error);
@@ -60,12 +59,12 @@ async function updateBrand(req, res, next) {
   try {
     const brandId = req.params.id;
     const { name } = req.body;
-    if (!name || name.trim().isEmpty) {
+    if (!name || name.trim() === "") {
       res.status(400);
       throw new Error('Brand name is required');
     }
 
-    await brandModel.updateBrand(brandId, name.trim());
+    await pool.execute('UPDATE brands SET name = ? WHERE id = ?', [name.trim(), brandId]);
     res.json({
       success: true,
       message: 'Brand updated successfully',
@@ -82,7 +81,7 @@ async function updateBrand(req, res, next) {
 async function deleteBrand(req, res, next) {
   try {
     const brandId = req.params.id;
-    await brandModel.deleteBrand(brandId);
+    await pool.execute('DELETE FROM brands WHERE id = ?', [brandId]);
     res.json({
       success: true,
       message: 'Brand deleted successfully'
@@ -98,16 +97,16 @@ async function deleteBrand(req, res, next) {
 async function addPartType(req, res, next) {
   try {
     const { name } = req.body;
-    if (!name || name.trim().isEmpty) {
+    if (!name || name.trim() === "") {
       res.status(400);
       throw new Error('Part type name is required');
     }
 
-    const partTypeId = await partTypeModel.createPartType(name.trim());
+    const [result] = await pool.execute('INSERT INTO part_types (name) VALUES (?)', [name.trim()]);
     res.status(201).json({
       success: true,
       message: 'Part type created successfully',
-      data: { id: partTypeId, name: name.trim() }
+      data: { id: result.insertId, name: name.trim() }
     });
   } catch (error) {
     next(error);
@@ -121,12 +120,12 @@ async function updatePartType(req, res, next) {
   try {
     const partTypeId = req.params.id;
     const { name } = req.body;
-    if (!name || name.trim().isEmpty) {
+    if (!name || name.trim() === "") {
       res.status(400);
       throw new Error('Part type name is required');
     }
 
-    await partTypeModel.updatePartType(partTypeId, name.trim());
+    await pool.execute('UPDATE part_types SET name = ? WHERE id = ?', [name.trim(), partTypeId]);
     res.json({
       success: true,
       message: 'Part type updated successfully',
@@ -143,7 +142,7 @@ async function updatePartType(req, res, next) {
 async function deletePartType(req, res, next) {
   try {
     const partTypeId = req.params.id;
-    await partTypeModel.deletePartType(partTypeId);
+    await pool.execute('DELETE FROM part_types WHERE id = ?', [partTypeId]);
     res.json({
       success: true,
       message: 'Part type deleted successfully'

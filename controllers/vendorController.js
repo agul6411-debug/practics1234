@@ -1,5 +1,4 @@
-const vendorModel = require('../models/vendorModel');
-const userModel = require('../models/userModel');
+const pool = require('../db');
 
 /**
  * Gets the profile of the logged-in vendor.
@@ -7,13 +6,18 @@ const userModel = require('../models/userModel');
 async function getMyProfile(req, res, next) {
   try {
     const userId = req.user.id;
-    const user = await userModel.findUserById(userId);
+    
+    // Find user
+    const [userRows] = await pool.execute('SELECT * FROM users WHERE id = ?', [userId]);
+    const user = userRows[0] || null;
     if (!user) {
       res.status(404);
       throw new Error('User account not found');
     }
 
-    const vendorProfile = await vendorModel.findVendorByUserId(userId);
+    // Find vendor profile
+    const [vendRows] = await pool.execute('SELECT * FROM vendors WHERE user_id = ?', [userId]);
+    const vendorProfile = vendRows[0] || null;
     if (!vendorProfile) {
       res.status(404);
       throw new Error('Vendor profile not found');
@@ -50,7 +54,10 @@ async function getMyProfile(req, res, next) {
 async function updateMyProfile(req, res, next) {
   try {
     const userId = req.user.id;
-    const vendorProfile = await vendorModel.findVendorByUserId(userId);
+
+    // Find vendor profile
+    const [vendRows] = await pool.execute('SELECT * FROM vendors WHERE user_id = ?', [userId]);
+    const vendorProfile = vendRows[0] || null;
     if (!vendorProfile) {
       res.status(404);
       throw new Error('Vendor profile not found');
@@ -58,15 +65,26 @@ async function updateMyProfile(req, res, next) {
 
     const { shop_name, city, address, latitude, longitude } = req.body;
 
-    await vendorModel.updateVendorProfileByUserId(userId, {
-      shop_name,
-      city,
-      address,
-      latitude,
-      longitude
-    });
+    const allowedFields = ['shop_name', 'city', 'address', 'latitude', 'longitude'];
+    const updates = [];
+    const values = [];
+    const fields = { shop_name, city, address, latitude, longitude };
 
-    const updatedProfile = await vendorModel.findVendorByUserId(userId);
+    for (const field of allowedFields) {
+      if (fields[field] !== undefined) {
+        updates.push(`${field} = ?`);
+        values.push(fields[field]);
+      }
+    }
+
+    if (updates.length > 0) {
+      values.push(userId);
+      await pool.execute(`UPDATE vendors SET ${updates.join(', ')} WHERE user_id = ?`, values);
+    }
+
+    // Get updated profile
+    const [updatedRows] = await pool.execute('SELECT * FROM vendors WHERE user_id = ?', [userId]);
+    const updatedProfile = updatedRows[0] || null;
 
     res.json({
       success: true,

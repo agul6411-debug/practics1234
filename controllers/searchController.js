@@ -1,4 +1,4 @@
-const pool = require('../config/db');
+const pool = require('../db');
 
 /**
  * Executes parts search with optional filters and vendor details aggregation.

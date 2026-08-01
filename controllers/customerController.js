@@ -1,5 +1,4 @@
-const customerModel = require('../models/customerModel');
-const userModel = require('../models/userModel');
+const pool = require('../db');
 
 /**
  * Gets the profile of the logged-in customer.
@@ -7,13 +6,18 @@ const userModel = require('../models/userModel');
 async function getMyProfile(req, res, next) {
   try {
     const userId = req.user.id;
-    const user = await userModel.findUserById(userId);
+
+    // Find user
+    const [userRows] = await pool.execute('SELECT * FROM users WHERE id = ?', [userId]);
+    const user = userRows[0] || null;
     if (!user) {
       res.status(404);
       throw new Error('User account not found');
     }
 
-    const customerProfile = await customerModel.findCustomerByUserId(userId);
+    // Find customer profile
+    const [custRows] = await pool.execute('SELECT * FROM customers WHERE user_id = ?', [userId]);
+    const customerProfile = custRows[0] || null;
     if (!customerProfile) {
       res.status(404);
       throw new Error('Customer profile not found');
@@ -44,7 +48,10 @@ async function getMyProfile(req, res, next) {
 async function updateMyProfile(req, res, next) {
   try {
     const userId = req.user.id;
-    const customerProfile = await customerModel.findCustomerByUserId(userId);
+
+    // Find customer profile
+    const [custRows] = await pool.execute('SELECT * FROM customers WHERE user_id = ?', [userId]);
+    const customerProfile = custRows[0] || null;
     if (!customerProfile) {
       res.status(404);
       throw new Error('Customer profile not found');
@@ -56,8 +63,11 @@ async function updateMyProfile(req, res, next) {
       throw new Error('City is required');
     }
 
-    await customerModel.updateCustomerProfileByUserId(userId, { city });
-    const updatedProfile = await customerModel.findCustomerByUserId(userId);
+    await pool.execute('UPDATE customers SET city = ? WHERE user_id = ?', [city, userId]);
+
+    // Find updated customer profile
+    const [updatedRows] = await pool.execute('SELECT * FROM customers WHERE user_id = ?', [userId]);
+    const updatedProfile = updatedRows[0] || null;
 
     res.json({
       success: true,

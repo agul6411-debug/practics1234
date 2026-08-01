@@ -1,10 +1,6 @@
-const userModel = require('../models/userModel');
-const vendorModel = require('../models/vendorModel');
-const customerModel = require('../models/customerModel');
-const { hashPassword, comparePassword } = require('../utils/hash');
-const { generateToken } = require('../utils/jwt');
+const pool = require('../db');
+const { hashPassword, comparePassword, generateToken } = require('../utils');
 
-// Simple email regex pattern
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
@@ -32,7 +28,6 @@ async function registerCustomer(req, res, next) {
   try {
     const { name, email, password, phone, city } = req.body;
 
-    // Validate fields
     validateRegistration(res, { name, email, password });
     if (!city) {
       res.status(400);
@@ -40,27 +35,22 @@ async function registerCustomer(req, res, next) {
     }
 
     // Check if email already exists
-    const existingUser = await userModel.findUserByEmail(email);
-    if (existingUser) {
+    const [existingUserRows] = await pool.execute('SELECT * FROM users WHERE email = ?', [email]);
+    if (existingUserRows.length > 0) {
       res.status(409); // Conflict
       throw new Error('Email address already registered');
     }
 
     // Hash password and create user record
     const hashedPassword = await hashPassword(password);
-    const userId = await userModel.createUser({
-      name,
-      email,
-      password: hashedPassword,
-      phone,
-      role: 'customer'
-    });
+    const [userResult] = await pool.execute(
+      'INSERT INTO users (name, email, password, phone, role) VALUES (?, ?, ?, ?, ?)',
+      [name, email, hashedPassword, phone || null, 'customer']
+    );
+    const userId = userResult.insertId;
 
     // Create customer profile
-    await customerModel.createCustomerProfile({
-      user_id: userId,
-      city
-    });
+    await pool.execute('INSERT INTO customers (user_id, city) VALUES (?, ?)', [userId, city]);
 
     res.status(201).json({
       success: true,
@@ -89,7 +79,6 @@ async function registerVendor(req, res, next) {
       longitude
     } = req.body;
 
-    // Validate fields
     validateRegistration(res, { name, email, password });
     if (!shop_name || !city || !address) {
       res.status(400);
@@ -97,32 +86,34 @@ async function registerVendor(req, res, next) {
     }
 
     // Check if email already exists
-    const existingUser = await userModel.findUserByEmail(email);
-    if (existingUser) {
+    const [existingUserRows] = await pool.execute('SELECT * FROM users WHERE email = ?', [email]);
+    if (existingUserRows.length > 0) {
       res.status(409);
       throw new Error('Email address already registered');
     }
 
     // Hash password and create user record
     const hashedPassword = await hashPassword(password);
-    const userId = await userModel.createUser({
-      name,
-      email,
-      password: hashedPassword,
-      phone,
-      role: 'vendor'
-    });
+    const [userResult] = await pool.execute(
+      'INSERT INTO users (name, email, password, phone, role) VALUES (?, ?, ?, ?, ?)',
+      [name, email, hashedPassword, phone || null, 'vendor']
+    );
+    const userId = userResult.insertId;
 
     // Create vendor profile
-    await vendorModel.createVendorProfile({
-      user_id: userId,
-      shop_name,
-      verification_docs,
-      city,
-      address,
-      latitude,
-      longitude
-    });
+    await pool.execute(
+      `INSERT INTO vendors (user_id, shop_name, verification_docs, city, address, latitude, longitude, verification_status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')`,
+      [
+        userId,
+        shop_name,
+        verification_docs || null,
+        city,
+        address,
+        latitude !== undefined && latitude !== null ? latitude : null,
+        longitude !== undefined && longitude !== null ? longitude : null
+      ]
+    );
 
     res.status(201).json({
       success: true,
@@ -146,7 +137,8 @@ async function login(req, res, next) {
     }
 
     // Search user by email
-    const user = await userModel.findUserByEmail(email);
+    const [userRows] = await pool.execute('SELECT * FROM users WHERE email = ?', [email]);
+    const user = userRows[0] || null;
     if (!user) {
       res.status(401);
       throw new Error('Invalid email or password');
@@ -168,7 +160,8 @@ async function login(req, res, next) {
     // Load respective profile info
     let profile = {};
     if (user.role === 'customer') {
-      const customerProfile = await customerModel.findCustomerByUserId(user.id);
+      const [custRows] = await pool.execute('SELECT * FROM customers WHERE user_id = ?', [user.id]);
+      const customerProfile = custRows[0] || null;
       if (customerProfile) {
         profile = {
           customer_id: customerProfile.id,
@@ -176,7 +169,8 @@ async function login(req, res, next) {
         };
       }
     } else if (user.role === 'vendor') {
-      const vendorProfile = await vendorModel.findVendorByUserId(user.id);
+      const [vendRows] = await pool.execute('SELECT * FROM vendors WHERE user_id = ?', [user.id]);
+      const vendorProfile = vendRows[0] || null;
       if (vendorProfile) {
         profile = {
           vendor_id: vendorProfile.id,
@@ -194,7 +188,6 @@ async function login(req, res, next) {
     // Generate JWT token
     const token = generateToken({ id: user.id, role: user.role });
 
-    // Respond with token and user profile object
     res.json({
       success: true,
       token,
