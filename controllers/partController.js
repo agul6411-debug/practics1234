@@ -29,14 +29,19 @@ async function addPart(req, res, next) {
       throw new Error('Required fields missing: brand_id, part_type_id, model_name, price, condition_type');
     }
 
+    if (!barcode_number || barcode_number.trim() === '' || barcode_number === 'null') {
+      return res.status(400).json({
+        success: false,
+        message: 'Barcode / QR Code number is strictly required for all product listings.'
+      });
+    }
+
     if (!req.files || !req.files['originalPhoto'] || !req.files['barcodePhoto']) {
       res.status(400);
       throw new Error('Required authenticity files missing: originalPhoto and barcodePhoto must be uploaded');
     }
 
-    const cleanBarcode = (barcode_number && barcode_number.trim() !== '' && barcode_number !== 'null')
-      ? barcode_number.trim()
-      : null;
+    const cleanBarcode = barcode_number.trim();
 
     if (cleanBarcode) {
       const [existingParts] = await pool.execute(

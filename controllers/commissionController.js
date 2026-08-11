@@ -16,11 +16,17 @@ async function uploadProof(req, res, next) {
     }
 
     const commissionId = req.params.id;
-    const { payment_proof_url } = req.body;
+    let proofUrl = (req.body.payment_proof_url && req.body.payment_proof_url.trim().length > 0)
+      ? req.body.payment_proof_url.trim()
+      : null;
 
-    if (!payment_proof_url || payment_proof_url.trim().length === 0) {
+    if (req.file) {
+      proofUrl = '/uploads/parts/' + req.file.filename;
+    }
+
+    if (!proofUrl) {
       res.status(400);
-      throw new Error('payment_proof_url is required');
+      throw new Error('Receipt image file is required');
     }
 
     // Get commission by ID
@@ -39,13 +45,20 @@ async function uploadProof(req, res, next) {
       });
     }
 
+    if (commission.status === 'paid') {
+      return res.status(400).json({
+        success: false,
+        message: 'This commission has already been verified and paid.'
+      });
+    }
+
     // Update payment proof
     await pool.execute(
       `UPDATE commissions 
        SET payment_proof_url = ?, 
            status = IF(status = 'rejected', 'pending', status)
        WHERE id = ?`,
-      [payment_proof_url.trim(), commissionId]
+      [proofUrl, commissionId]
     );
 
     // Get updated commission

@@ -10,7 +10,8 @@ async function getAllVendors(req, res, next) {
     let query = `
       SELECT 
         v.id as vendor_id, v.user_id, v.shop_name, v.verification_docs, v.city, v.address,
-        v.latitude, v.longitude, v.verification_status, v.created_at as vendor_created_at,
+        v.latitude, v.longitude, v.verification_status, v.security_deposit_status,
+        v.security_deposit_proof, v.security_deposit_amount, v.created_at as vendor_created_at,
         u.name as owner_name, u.email as owner_email, u.phone as owner_phone, u.status as account_status
       FROM vendors v
       JOIN users u ON v.user_id = u.id
@@ -199,12 +200,114 @@ async function getDashboardStats(req, res, next) {
   }
 }
 
+/**
+ * Public & Vendor endpoint to fetch current system settings
+ */
+async function getPublicSettings(req, res, next) {
+  try {
+    const [rows] = await pool.execute('SELECT * FROM system_settings');
+    const settingsMap = {
+      security_deposit_amount: '500',
+      security_deposit_phone: '+92 311 7595866',
+      commission_rate_percent: '10'
+    };
+    rows.forEach(r => settingsMap[r.setting_key] = r.setting_value);
+
+    res.json({
+      success: true,
+      data: settingsMap
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Admin updates system settings (Security Deposit Amount, Phone, Commission Rate %)
+ */
+async function updateSystemSettings(req, res, next) {
+  try {
+    const { security_deposit_amount, security_deposit_phone, commission_rate_percent } = req.body;
+
+    if (security_deposit_amount !== undefined) {
+      await pool.execute(
+        `INSERT INTO system_settings (setting_key, setting_value) VALUES ('security_deposit_amount', ?)
+         ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)`,
+        [String(security_deposit_amount)]
+      );
+    }
+
+    if (security_deposit_phone !== undefined) {
+      await pool.execute(
+        `INSERT INTO system_settings (setting_key, setting_value) VALUES ('security_deposit_phone', ?)
+         ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)`,
+        [String(security_deposit_phone)]
+      );
+    }
+
+    if (commission_rate_percent !== undefined) {
+      await pool.execute(
+        `INSERT INTO system_settings (setting_key, setting_value) VALUES ('commission_rate_percent', ?)
+         ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)`,
+        [String(commission_rate_percent)]
+      );
+    }
+
+    const [rows] = await pool.execute('SELECT * FROM system_settings');
+    const settingsMap = {};
+    rows.forEach(r => settingsMap[r.setting_key] = r.setting_value);
+
+    res.json({
+      success: true,
+      message: 'System settings updated successfully',
+      data: settingsMap
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Sets vendor security_deposit_status to 'paid'.
+ */
+async function verifyVendorDeposit(req, res, next) {
+  try {
+    const vendorId = req.params.id;
+
+    await pool.execute('UPDATE vendors SET security_deposit_status = ? WHERE id = ?', ['paid', vendorId]);
+
+    try {
+      const [vendRows] = await pool.execute('SELECT * FROM vendors WHERE id = ?', [vendorId]);
+      const vendorRecord = vendRows[0] || null;
+      if (vendorRecord) {
+        await pool.execute(
+          `INSERT INTO notifications (user_id, message, type, is_read)
+           VALUES (?, 'Your Security Deposit has been verified & approved! You can now respond to customer leads.', 'system', 0)`,
+          [vendorRecord.user_id]
+        );
+      }
+    } catch (notifErr) {
+      console.error('Notification creation failed in verifyVendorDeposit:', notifErr.message);
+    }
+
+    res.json({
+      success: true,
+      message: 'Vendor security deposit verified and marked as paid successfully'
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   getAllVendors,
   approveVendor,
   rejectVendor,
+  verifyVendorDeposit,
   getAllUsers,
   blockUser,
   unblockUser,
-  getDashboardStats
+  getDashboardStats,
+  getPublicSettings,
+  updateSystemSettings
 };

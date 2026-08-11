@@ -44,16 +44,26 @@ function authorizeRoles(...allowedRoles) {
   };
 }
 
+const fs = require('fs');
+
 /**
  * Configure disk storage for Multer uploads
  */
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, 'uploads/parts/');
+    const dir = path.join(__dirname, 'uploads', 'parts');
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    cb(null, dir);
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    cb(null, uniqueSuffix + path.extname(file.originalname));
+    let ext = path.extname(file.originalname).toLowerCase();
+    if (!ext || ext === '') {
+      ext = '.jpg';
+    }
+    cb(null, uniqueSuffix + ext);
   }
 });
 
@@ -61,13 +71,13 @@ const storage = multer.diskStorage({
  * Validate image extensions for uploads
  */
 const fileFilter = (req, file, cb) => {
-  const allowedExtensions = /jpe?g|png/i;
+  const allowedExtensions = /jpe?g|png|webp|gif|bmp/i;
   const ext = path.extname(file.originalname).toLowerCase();
   
-  if (allowedExtensions.test(ext)) {
+  if (!ext || ext === '' || allowedExtensions.test(ext)) {
     cb(null, true);
   } else {
-    cb(new Error('Invalid file type. Only JPEG, JPG, and PNG images are allowed.'));
+    cb(new Error('Invalid file type. Only JPEG, JPG, PNG, and WEBP images are allowed.'));
   }
 };
 

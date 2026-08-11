@@ -67,9 +67,19 @@ async function createRequest(req, res, next) {
     );
     const requestId = requestResult.insertId;
 
-    // If this is a brand new unique customer and sequence_number > 2 (locked), automatically create a 10% commission record
+    // If this is a brand new unique customer and sequence_number > 2 (locked), automatically create commission record
     if (!existingReq && isLocked) {
-      const amount = Number((part.price * 0.10).toFixed(2));
+      let ratePercent = 10;
+      try {
+        const [rateRows] = await pool.execute("SELECT setting_value FROM system_settings WHERE setting_key = 'commission_rate_percent'");
+        if (rateRows.length > 0 && !isNaN(rateRows[0].setting_value)) {
+          ratePercent = parseFloat(rateRows[0].setting_value);
+        }
+      } catch (err) {
+        console.warn('System settings fetch error, using default 10% rate:', err.message);
+      }
+
+      const amount = Number((part.price * (ratePercent / 100)).toFixed(2));
       await pool.execute(
         `INSERT INTO commissions (request_id, vendor_id, amount, status)
          VALUES (?, ?, ?, 'pending')`,
@@ -313,58 +323,63 @@ async function respondToRequest(req, res, next) {
 }
 
 /**
- * Customer Delivery Verification & Anti-Fake QR Security Check
+ * Customer & System Delivery Verification (Auto-Detects Barcode vs QR Code, Checks Reuse & Authenticity)
  */
 async function verifyDelivery(req, res, next) {
   try {
-    const userId = req.user.id;
-
-    // Find customer profile
-    const [custRows] = await pool.execute('SELECT * FROM customers WHERE user_id = ?', [userId]);
-    const customer = custRows[0] || null;
-    if (!customer) {
-      return res.status(404).json({
-        success: false,
-        message: 'Customer profile not found'
-      });
-    }
-
-    const { request_id, scanned_barcode } = req.body;
-    if (!request_id || !scanned_barcode || scanned_barcode.trim() === '') {
+    const { part_id, request_id, scanned_barcode } = req.body;
+    if (!scanned_barcode || scanned_barcode.trim() === '') {
       return res.status(400).json({
         success: false,
-        message: 'Missing required parameters: request_id and scanned_barcode are required.'
+        message: 'Missing required parameter: scanned_barcode.'
       });
     }
 
     const cleanScanned = scanned_barcode.trim();
 
-    // Retrieve request & part details
-    const [reqRows] = await pool.execute(
-      `SELECT r.*, p.barcode_number, p.model_name, p.vendor_id 
-       FROM requests r 
-       JOIN parts p ON r.part_id = p.id 
-       WHERE r.id = ? AND r.customer_id = ?`,
-      [request_id, customer.id]
-    );
+    // Auto-detect Code Format (Barcode vs QR Code)
+    const isQrCode = cleanScanned.includes('http://') || 
+                     cleanScanned.includes('https://') || 
+                     cleanScanned.startsWith('{') || 
+                     cleanScanned.toLowerCase().startsWith('qr') || 
+                     cleanScanned.length > 20 || 
+                     cleanScanned.includes(':');
+    const codeTypeLabel = isQrCode ? 'QR Code' : 'Barcode';
 
-    const request = reqRows[0] || null;
-    if (!request) {
-      return res.status(404).json({
-        success: false,
-        message: 'Request record not found or access denied.'
-      });
+    let partId = part_id ? parseInt(part_id, 10) : null;
+    let expectedBarcode = '';
+
+    if (request_id) {
+      const [reqRows] = await pool.execute(
+        `SELECT r.*, p.barcode_number, p.id as p_id 
+         FROM requests r 
+         JOIN parts p ON r.part_id = p.id 
+         WHERE r.id = ?`,
+        [request_id]
+      );
+      if (reqRows.length > 0) {
+        partId = reqRows[0].p_id;
+        expectedBarcode = (reqRows[0].barcode_number || '').trim();
+      }
     }
 
-    const expectedBarcode = (request.barcode_number || '').trim();
+    if (partId && !expectedBarcode) {
+      const [partRows] = await pool.execute('SELECT barcode_number FROM parts WHERE id = ?', [partId]);
+      if (partRows.length > 0) {
+        expectedBarcode = (partRows[0].barcode_number || '').trim();
+      }
+    }
 
-    // SECURITY CHECK 1: Anti-Fake / Product Already Sold Check across ALL previously verified orders
+    // SECURITY CHECK 1: Product Already Sold / Previously Verified Check across ALL orders
+    const reqFilter = request_id ? 'AND r.id != ?' : '';
+    const reqParams = request_id ? [cleanScanned, request_id] : [cleanScanned];
+
     const [prevReuseRows] = await pool.execute(
       `SELECT r.id, r.created_at, r.verified_at, p.model_name
        FROM requests r
        JOIN parts p ON r.part_id = p.id
-       WHERE LOWER(TRIM(r.verified_barcode)) = LOWER(TRIM(?)) AND r.id != ?`,
-      [cleanScanned, request_id]
+       WHERE LOWER(TRIM(r.verified_barcode)) = LOWER(TRIM(?)) ${reqFilter}`,
+      reqParams
     );
 
     if (prevReuseRows.length > 0) {
@@ -374,18 +389,22 @@ async function verifyDelivery(req, res, next) {
         is_match: false,
         is_duplicate_reuse: true,
         is_already_sold: true,
+        code_type: codeTypeLabel,
         previous_request_id: prevOrder.id,
-        message: `🚨 SECURITY ALERT: PRODUCT ALREADY SOLD / REUSED QR CODE DETECTED!\nThis Barcode/QR Code was ALREADY scanned & verified in a previous completed delivery (Order #${prevOrder.id}). Reusing already-sold or copied QR code labels is strictly prohibited!`
+        message: `🚨 FRAUD WARNING: PRODUCT ALREADY SOLD!\nThis original product with ${codeTypeLabel} (${cleanScanned}) was ALREADY sold and verified in a previous completed order (#${prevOrder.id}). The ${codeTypeLabel} label attached to this package is FAKE or COPIED!`
       });
     }
 
-    // SECURITY CHECK 2: Copied Barcode Check across OTHER registered parts
+    // SECURITY CHECK 2: Copied Code Check across OTHER registered parts in system
+    const partFilter = partId ? 'AND p.id != ?' : '';
+    const partParams = partId ? [cleanScanned, partId] : [cleanScanned];
+
     const [otherPartRows] = await pool.execute(
       `SELECT p.id, p.model_name, v.shop_name
        FROM parts p
        JOIN vendors v ON p.vendor_id = v.id
-       WHERE LOWER(TRIM(p.barcode_number)) = LOWER(TRIM(?)) AND p.id != ?`,
-      [cleanScanned, request.part_id]
+       WHERE LOWER(TRIM(p.barcode_number)) = LOWER(TRIM(?)) ${partFilter}`,
+      partParams
     );
 
     if (otherPartRows.length > 0) {
@@ -395,11 +414,12 @@ async function verifyDelivery(req, res, next) {
         is_match: false,
         is_duplicate_reuse: true,
         is_already_sold: false,
-        message: `🚨 SECURITY ALERT: COPIED / FAKE BARCODE DETECTED!\nThis Barcode/QR Code belongs to another product listing (${otherPart.model_name} from ${otherPart.shop_name}). The vendor is using a copied barcode label!`
+        code_type: codeTypeLabel,
+        message: `🚨 FRAUD WARNING: COPIED / FAKE ${codeTypeLabel.toUpperCase()} DETECTED!\nThis ${codeTypeLabel} belongs to another product listing (${otherPart.model_name} from ${otherPart.shop_name}). The vendor attached a duplicate/fake ${codeTypeLabel} label to this package!`
       });
     }
 
-    // SECURITY CHECK 3: Match against declared product barcode
+    // SECURITY CHECK 3: Match against declared product code
     const isMatch = cleanScanned.toLowerCase() === expectedBarcode.toLowerCase();
 
     if (!isMatch) {
@@ -407,21 +427,25 @@ async function verifyDelivery(req, res, next) {
         success: false,
         is_match: false,
         is_duplicate_reuse: false,
-        message: `Mismatch — Scanned code (${cleanScanned}) does not match declared barcode (${expectedBarcode || 'N/A'}).`
+        code_type: codeTypeLabel,
+        message: `Mismatch — Scanned ${codeTypeLabel} (${cleanScanned}) does not match declared product ${codeTypeLabel} (${expectedBarcode || 'N/A'}).`
       });
     }
 
-    // UPDATE REQUEST AS VERIFIED & ORIGINAL
-    await pool.execute(
-      `UPDATE requests SET verified_barcode = ?, verified_at = NOW(), status = 'available' WHERE id = ?`,
-      [cleanScanned, request_id]
-    );
+    // UPDATE REQUEST AS VERIFIED (If request_id present)
+    if (request_id) {
+      await pool.execute(
+        `UPDATE requests SET verified_barcode = ?, verified_at = NOW(), status = 'available' WHERE id = ?`,
+        [cleanScanned, request_id]
+      );
+    }
 
     return res.status(200).json({
       success: true,
       is_match: true,
       is_duplicate_reuse: false,
-      message: '✅ Authentic Product Verified! QR code is genuine and original. Go ahead.'
+      code_type: codeTypeLabel,
+      message: `✅ Authentic Product Verified! This ${codeTypeLabel} is genuine and original. Go ahead.`
     });
   } catch (error) {
     next(error);

@@ -180,7 +180,10 @@ async function login(req, res, next) {
           address: vendorProfile.address,
           latitude: vendorProfile.latitude,
           longitude: vendorProfile.longitude,
-          verification_status: vendorProfile.verification_status
+          verification_status: vendorProfile.verification_status,
+          security_deposit_status: vendorProfile.security_deposit_status || 'unpaid',
+          security_deposit_amount: vendorProfile.security_deposit_amount || 5000.00,
+          security_deposit_proof: vendorProfile.security_deposit_proof || null
         };
       }
     }

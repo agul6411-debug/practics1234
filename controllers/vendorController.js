@@ -40,6 +40,9 @@ async function getMyProfile(req, res, next) {
         latitude: vendorProfile.latitude,
         longitude: vendorProfile.longitude,
         verification_status: vendorProfile.verification_status,
+        security_deposit_status: vendorProfile.security_deposit_status || 'unpaid',
+        security_deposit_amount: vendorProfile.security_deposit_amount || 5000.00,
+        security_deposit_proof: vendorProfile.security_deposit_proof || null,
         created_at: vendorProfile.created_at
       }
     });
@@ -96,7 +99,62 @@ async function updateMyProfile(req, res, next) {
   }
 }
 
+/**
+ * Submits vendor security deposit receipt URL.
+ */
+async function submitSecurityDepositProof(req, res, next) {
+  try {
+    const userId = req.user.id;
+    let proofUrl = (req.body.deposit_proof_url && req.body.deposit_proof_url.trim().length > 0)
+      ? req.body.deposit_proof_url.trim()
+      : null;
+
+    if (req.file) {
+      proofUrl = '/uploads/parts/' + req.file.filename;
+    }
+
+    if (!proofUrl) {
+      return res.status(400).json({
+        success: false,
+        message: 'Receipt image file is required.'
+      });
+    }
+
+    // Find vendor profile
+    const [vendRows] = await pool.execute('SELECT * FROM vendors WHERE user_id = ?', [userId]);
+    const vendorProfile = vendRows[0] || null;
+
+    if (!vendorProfile) {
+      await pool.execute(
+        `INSERT INTO vendors (user_id, shop_name, city, address, verification_status, security_deposit_proof, security_deposit_status)
+         VALUES (?, 'Vendor Shop', 'City', 'Address', 'approved', ?, 'pending_verification')`,
+        [userId, proofUrl]
+      );
+    } else {
+      await pool.execute(
+        `UPDATE vendors 
+         SET security_deposit_proof = ?, security_deposit_status = 'pending_verification' 
+         WHERE user_id = ?`,
+        [proofUrl, userId]
+      );
+    }
+
+    // Get updated profile
+    const [updatedRows] = await pool.execute('SELECT * FROM vendors WHERE user_id = ?', [userId]);
+    const updatedProfile = updatedRows[0] || null;
+
+    res.json({
+      success: true,
+      message: 'Security deposit proof submitted successfully! Verification pending admin review.',
+      data: updatedProfile
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   getMyProfile,
-  updateMyProfile
+  updateMyProfile,
+  submitSecurityDepositProof
 };

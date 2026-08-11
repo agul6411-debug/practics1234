@@ -52,7 +52,13 @@ router.get('/vendor/requests', verifyToken, authorizeRoles('vendor'), requestCon
 router.put('/vendor/requests/:id/respond', verifyToken, authorizeRoles('vendor'), requestController.respondToRequest);
 
 router.get('/vendor/commissions', verifyToken, authorizeRoles('vendor'), commissionController.getMyCommissions);
-router.post('/vendor/commissions/:id/proof', verifyToken, authorizeRoles('vendor'), commissionController.uploadProof);
+router.post(
+  '/vendor/commissions/:id/proof',
+  verifyToken,
+  authorizeRoles('vendor'),
+  upload.single('receiptImage'),
+  commissionController.uploadProof
+);
 
 // =========================================================================
 // 3. Parts Routes (/api/parts)
@@ -97,6 +103,7 @@ router.post('/customer/reviews', verifyToken, authorizeRoles('customer'), review
 router.get('/admin/vendors', verifyToken, authorizeRoles('admin'), adminController.getAllVendors);
 router.put('/admin/vendors/:id/approve', verifyToken, authorizeRoles('admin'), adminController.approveVendor);
 router.put('/admin/vendors/:id/reject', verifyToken, authorizeRoles('admin'), adminController.rejectVendor);
+router.put('/admin/vendors/:id/verify-deposit', verifyToken, authorizeRoles('admin'), adminController.verifyVendorDeposit);
 
 router.get('/admin/users', verifyToken, authorizeRoles('admin'), adminController.getAllUsers);
 router.put('/admin/users/:id/block', verifyToken, authorizeRoles('admin'), adminController.blockUser);
@@ -111,6 +118,17 @@ router.put('/admin/commissions/:id/reject', verifyToken, authorizeRoles('admin')
 router.get('/admin/reports', verifyToken, authorizeRoles('admin'), reportController.getAllReportsAdmin);
 router.put('/admin/reports/:id/resolve', verifyToken, authorizeRoles('admin'), reportController.resolveReport);
 router.put('/admin/reports/:id/dismiss', verifyToken, authorizeRoles('admin'), reportController.dismissReport);
+
+router.get('/settings/public', adminController.getPublicSettings);
+router.get('/admin/settings', verifyToken, authorizeRoles('admin'), adminController.getPublicSettings);
+router.put('/admin/settings', verifyToken, authorizeRoles('admin'), adminController.updateSystemSettings);
+router.post(
+  '/vendor/security-deposit',
+  verifyToken,
+  authorizeRoles('vendor'),
+  upload.single('receiptImage'),
+  vendorController.submitSecurityDepositProof
+);
 
 // =========================================================================
 // 7. Notification Routes (/api/notifications)
