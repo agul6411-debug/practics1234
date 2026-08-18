@@ -7,15 +7,15 @@ async function createRequest(req, res, next) {
   try {
     const userId = req.user.id;
 
-    // Find customer profile
-    const [custRows] = await pool.execute('SELECT * FROM customers WHERE user_id = ?', [userId]);
-    const customer = custRows[0] || null;
+    // Find customer profile (auto-create fallback if missing)
+    let [custRows] = await pool.execute('SELECT * FROM customers WHERE user_id = ?', [userId]);
+    let customer = custRows[0] || null;
     if (!customer) {
-      res.status(404);
-      throw new Error('Customer profile not found');
+      const [insertRes] = await pool.execute('INSERT INTO customers (user_id, city) VALUES (?, ?)', [userId, 'City']);
+      customer = { id: insertRes.insertId, user_id: userId, city: 'City' };
     }
 
-    const { part_id } = req.body;
+    const { part_id, delivery_type, delivery_address, delivery_city, delivery_phone, delivery_notes } = req.body;
     if (!part_id) {
       res.status(400);
       throw new Error('part_id is required');
@@ -29,13 +29,29 @@ async function createRequest(req, res, next) {
       throw new Error('Part not found');
     }
 
+    // Stock Quantity & Sold Out Check
+    if (part.stock_quantity <= 0 || part.status === 'out_of_stock') {
+      return res.status(400).json({
+        success: false,
+        message: '🚨 PRODUCT SOLD OUT! This product is out of stock and cannot be requested.'
+      });
+    }
+
+    // Decrement stock quantity by 1
+    const newStock = Math.max(0, part.stock_quantity - 1);
+    const newStatus = newStock === 0 ? 'out_of_stock' : part.status;
+    await pool.execute(
+      'UPDATE parts SET stock_quantity = ?, status = ? WHERE id = ?',
+      [newStock, newStatus, part_id]
+    );
+
     const vendorId = part.vendor_id;
 
     // Check if this customer has previously contacted this vendor
     const [existingReqRows] = await pool.execute(
       `SELECT * FROM requests 
        WHERE customer_id = ? AND vendor_id = ? 
-       ORDER BY created_at ASC 
+       ORDER BY is_locked ASC, created_at ASC 
        LIMIT 1`,
       [customer.id, vendorId]
     );
@@ -45,9 +61,9 @@ async function createRequest(req, res, next) {
     let isLocked;
 
     if (existingReq) {
-      // Reuse sequence_number and is_locked status for known customers
+      // Reuse sequence_number and is_locked status for known customer-vendor pairs
       sequenceNumber = existingReq.sequence_number;
-      isLocked = Boolean(existingReq.is_locked);
+      isLocked = (existingReq.is_locked == 1 || existingReq.is_locked == true);
     } else {
       // First time contacting vendor: calculate nth distinct customer
       const [countRows] = await pool.execute(
@@ -59,11 +75,17 @@ async function createRequest(req, res, next) {
       isLocked = sequenceNumber > 2; // Lock leads after first 2 free customers
     }
 
-    // Create request
+    const delType = delivery_type === 'home_delivery' ? 'home_delivery' : 'shop_pickup';
+    const delAddress = delivery_address && delivery_address.trim() !== '' ? delivery_address.trim() : null;
+    const delCity = delivery_city && delivery_city.trim() !== '' ? delivery_city.trim() : null;
+    const delPhone = delivery_phone && delivery_phone.trim() !== '' ? delivery_phone.trim() : null;
+    const delNotes = delivery_notes && delivery_notes.trim() !== '' ? delivery_notes.trim() : null;
+
+    // Create request with Home Delivery details
     const [requestResult] = await pool.execute(
-      `INSERT INTO requests (customer_id, vendor_id, part_id, sequence_number, is_locked, status)
-       VALUES (?, ?, ?, ?, ?, 'requested')`,
-      [customer.id, vendorId, part_id, sequenceNumber, isLocked ? 1 : 0]
+      `INSERT INTO requests (customer_id, vendor_id, part_id, sequence_number, is_locked, status, delivery_type, delivery_address, delivery_city, delivery_phone, delivery_notes)
+       VALUES (?, ?, ?, ?, ?, 'requested', ?, ?, ?, ?, ?)`,
+      [customer.id, vendorId, part_id, sequenceNumber, isLocked ? 1 : 0, delType, delAddress, delCity, delPhone, delNotes]
     );
     const requestId = requestResult.insertId;
 
@@ -93,8 +115,8 @@ async function createRequest(req, res, next) {
       const vendorRecord = vendRows[0] || null;
       if (vendorRecord) {
         const notifMsg = isLocked
-          ? 'New request received — pay pending commission to view details'
-          : `New request for ${part.model_name}`;
+          ? `New ${delType === 'home_delivery' ? 'Home Delivery' : 'Pickup'} request received — pay pending commission to view details`
+          : `New ${delType === 'home_delivery' ? 'Home Delivery' : 'Pickup'} request for ${part.model_name}`;
         await pool.execute(
           `INSERT INTO notifications (user_id, message, type, is_read)
            VALUES (?, ?, 'request', 0)`,
@@ -138,6 +160,8 @@ async function getMyRequests(req, res, next) {
     const [requests] = await pool.execute(
       `SELECT 
         r.id, r.sequence_number, r.is_locked, r.status, r.created_at,
+        r.delivery_type, r.delivery_address, r.delivery_city, r.delivery_phone, r.delivery_notes,
+        r.cancellation_reason, r.cancelled_by, r.cancelled_at,
         p.id as part_id, p.model_name, p.price, p.image_url,
         v.id as vendor_id, v.user_id as vendor_user_id, v.shop_name, v.city as vendor_city, v.address as vendor_address,
         b.name as brand_name, pt.name as part_type_name
@@ -179,6 +203,8 @@ async function getVendorRequests(req, res, next) {
     const [rawRequests] = await pool.execute(
       `SELECT 
         r.id, r.customer_id, r.vendor_id, r.part_id, r.sequence_number, r.is_locked, r.status, r.created_at,
+        r.delivery_type, r.delivery_address, r.delivery_city, r.delivery_phone, r.delivery_notes,
+        r.cancellation_reason, r.cancelled_by, r.cancelled_at,
         p.model_name, p.price, p.condition_type, p.image_url,
         u.id as customer_user_id, u.name as customer_name, u.phone as customer_phone, u.email as customer_email,
         c.city as customer_city
@@ -201,11 +227,15 @@ async function getVendorRequests(req, res, next) {
           sequence_number: reqItem.sequence_number,
           is_locked: true,
           status: reqItem.status,
+          delivery_type: reqItem.delivery_type,
           created_at: reqItem.created_at,
           model_name: reqItem.model_name,
           price: reqItem.price,
           condition_type: reqItem.condition_type,
           image_url: reqItem.image_url,
+          cancellation_reason: reqItem.cancellation_reason,
+          cancelled_by: reqItem.cancelled_by,
+          cancelled_at: reqItem.cancelled_at,
           message: 'Pay commission to view customer details'
         };
       } else {
@@ -218,6 +248,14 @@ async function getVendorRequests(req, res, next) {
           sequence_number: reqItem.sequence_number,
           is_locked: false,
           status: reqItem.status,
+          delivery_type: reqItem.delivery_type,
+          delivery_address: reqItem.delivery_address,
+          delivery_city: reqItem.delivery_city,
+          delivery_phone: reqItem.delivery_phone,
+          delivery_notes: reqItem.delivery_notes,
+          cancellation_reason: reqItem.cancellation_reason,
+          cancelled_by: reqItem.cancelled_by,
+          cancelled_at: reqItem.cancelled_at,
           created_at: reqItem.created_at,
           model_name: reqItem.model_name,
           price: reqItem.price,
@@ -277,6 +315,14 @@ async function respondToRequest(req, res, next) {
       return res.status(403).json({
         success: false,
         message: 'Forbidden. You do not own this request.'
+      });
+    }
+
+    // Security Deposit Check
+    if ((vendor.security_deposit_status || '').toLowerCase() !== 'paid') {
+      return res.status(403).json({
+        success: false,
+        message: 'Security Deposit Required. You must have an approved and paid Security Deposit to respond to customer leads.'
       });
     }
 
@@ -432,12 +478,20 @@ async function verifyDelivery(req, res, next) {
       });
     }
 
-    // UPDATE REQUEST AS VERIFIED (If request_id present)
+    // UPDATE REQUEST AS VERIFIED & EXPIRE QR CODE (If request_id present)
     if (request_id) {
       await pool.execute(
         `UPDATE requests SET verified_barcode = ?, verified_at = NOW(), status = 'available' WHERE id = ?`,
         [cleanScanned, request_id]
       );
+
+      // Expire QR code / barcode token and set part to sold out
+      if (partId) {
+        await pool.execute(
+          `UPDATE parts SET status = 'out_of_stock', stock_quantity = 0 WHERE id = ?`,
+          [partId]
+        );
+      }
     }
 
     return res.status(200).json({
@@ -445,7 +499,157 @@ async function verifyDelivery(req, res, next) {
       is_match: true,
       is_duplicate_reuse: false,
       code_type: codeTypeLabel,
-      message: `✅ Authentic Product Verified! This ${codeTypeLabel} is genuine and original. Go ahead.`
+      message: `✅ Authentic Product Verified! This ${codeTypeLabel} is genuine. The ${codeTypeLabel} has now been marked as EXPIRED & INACTIVE.`
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Vendor Online Order Cancellation with Admin Notification & Counter Auto-Block (Limit: 3)
+ */
+async function cancelRequestByVendor(req, res, next) {
+  try {
+    const userId = req.user.id;
+
+    // Find vendor profile
+    const [vendRows] = await pool.execute('SELECT * FROM vendors WHERE user_id = ?', [userId]);
+    const vendor = vendRows[0] || null;
+    if (!vendor) {
+      res.status(404);
+      throw new Error('Vendor profile not found');
+    }
+
+    const requestId = req.params.id;
+    const { reason } = req.body;
+    const cancelReason = reason && reason.trim() !== '' ? reason.trim() : 'Vendor cancelled order online';
+
+    // Find request by ID
+    const [requestRows] = await pool.execute('SELECT * FROM requests WHERE id = ?', [requestId]);
+    const request = requestRows[0] || null;
+    if (!request) {
+      res.status(404);
+      throw new Error('Request not found');
+    }
+
+    // Ownership check
+    if (request.vendor_id !== vendor.id) {
+      return res.status(403).json({
+        success: false,
+        message: 'Forbidden. You do not own this request.'
+      });
+    }
+
+    if (request.status === 'cancelled') {
+      return res.status(400).json({
+        success: false,
+        message: 'This request has already been cancelled.'
+      });
+    }
+
+    // 1. Update Request status to cancelled
+    await pool.execute(
+      `UPDATE requests 
+       SET status = 'cancelled', cancellation_reason = ?, cancelled_by = 'vendor', cancelled_at = NOW() 
+       WHERE id = ?`,
+      [cancelReason, requestId]
+    );
+
+    // 2. Restore Part Stock Quantity
+    await pool.execute(
+      `UPDATE parts 
+       SET stock_quantity = stock_quantity + 1, status = IF(status = 'out_of_stock', 'available', status) 
+       WHERE id = ?`,
+      [request.part_id]
+    );
+
+    // 3. Increment Vendor Cancellation Counter
+    await pool.execute('UPDATE vendors SET cancellation_count = cancellation_count + 1 WHERE id = ?', [vendor.id]);
+
+    // Fetch updated vendor record & cancellation limit
+    const [updatedVendRows] = await pool.execute('SELECT * FROM vendors WHERE id = ?', [vendor.id]);
+    const updatedVendor = updatedVendRows[0] || vendor;
+    const newCancelCount = updatedVendor.cancellation_count || 1;
+
+    let maxLimit = 3;
+    try {
+      const [limitRows] = await pool.execute("SELECT setting_value FROM system_settings WHERE setting_key = 'max_vendor_cancellations'");
+      if (limitRows.length > 0 && !isNaN(limitRows[0].setting_value)) {
+        maxLimit = parseInt(limitRows[0].setting_value, 10);
+      }
+    } catch (_) {}
+
+    const isAutoBlocked = newCancelCount >= maxLimit;
+
+    // 4. Auto-block Vendor if cancellation count reaches limit (3 or 4)
+    if (isAutoBlocked) {
+      await pool.execute("UPDATE users SET status = 'blocked' WHERE id = ?", [vendor.user_id]);
+
+      try {
+        await pool.execute(
+          `INSERT INTO notifications (user_id, message, type, is_read)
+           VALUES (?, ?, 'system', 0)`,
+          [
+            vendor.user_id,
+            `🚨 ACCOUNT AUTOMATICALLY BLOCKED: Your vendor account has been blocked because you cancelled ${newCancelCount} orders (Cancellation Limit: ${maxLimit}). Reason: Exceeded online order cancellation limit.`
+          ]
+        );
+      } catch (notifErr) {
+        console.error('Failed to notify vendor of auto-block:', notifErr.message);
+      }
+    }
+
+    // 5. Notify Customer about cancellation
+    try {
+      const [custRows] = await pool.execute('SELECT * FROM customers WHERE id = ?', [request.customer_id]);
+      const customerRecord = custRows[0] || null;
+      const [partRows] = await pool.execute('SELECT model_name FROM parts WHERE id = ?', [request.part_id]);
+      const partModelName = partRows[0] ? partRows[0].model_name : 'product';
+
+      if (customerRecord) {
+        await pool.execute(
+          `INSERT INTO notifications (user_id, message, type, is_read)
+           VALUES (?, ?, 'response', 0)`,
+          [
+            customerRecord.user_id,
+            `Your order #${requestId} for ${partModelName} was cancelled by the vendor. Reason: ${cancelReason}`
+          ]
+        );
+      }
+    } catch (notifErr) {
+      console.error('Customer notification failed on cancellation:', notifErr.message);
+    }
+
+    // 6. Notify All Admins about Vendor Cancellation & Auto-Block Status
+    try {
+      const [adminRows] = await pool.execute("SELECT id FROM users WHERE role = 'admin'");
+      const [partRows] = await pool.execute('SELECT model_name FROM parts WHERE id = ?', [request.part_id]);
+      const partModelName = partRows[0] ? partRows[0].model_name : 'product';
+
+      const adminMsg = isAutoBlocked
+        ? `🚨 VENDOR AUTO-BLOCKED: Vendor '${updatedVendor.shop_name}' (ID: ${vendor.id}) cancelled Order #${requestId} (${partModelName}) and was AUTOMATICALLY BLOCKED after reaching ${newCancelCount}/${maxLimit} order cancellations!`
+        : `⚠️ ORDER CANCELLED BY VENDOR: Vendor '${updatedVendor.shop_name}' cancelled Order #${requestId} (${partModelName}). Reason: ${cancelReason}. Vendor total cancellations: ${newCancelCount}/${maxLimit}.`;
+
+      for (const adminUser of adminRows) {
+        await pool.execute(
+          `INSERT INTO notifications (user_id, message, type, is_read)
+           VALUES (?, ?, 'system', 0)`,
+          [adminUser.id, adminMsg]
+        );
+      }
+    } catch (adminNotifErr) {
+      console.error('Admin notification failed on cancellation:', adminNotifErr.message);
+    }
+
+    res.json({
+      success: true,
+      is_auto_blocked: isAutoBlocked,
+      cancellation_count: newCancelCount,
+      message: isAutoBlocked
+        ? `Order cancelled. 🚨 WARNING: Your account has been AUTOMATICALLY BLOCKED due to reaching the cancellation limit of ${maxLimit} orders.`
+        : `Order cancelled successfully. Total vendor cancellations: ${newCancelCount}/${maxLimit}.`,
+      data: { id: parseInt(requestId, 10), status: 'cancelled', cancellation_count: newCancelCount }
     });
   } catch (error) {
     next(error);
@@ -457,5 +661,6 @@ module.exports = {
   getMyRequests,
   getVendorRequests,
   respondToRequest,
+  cancelRequestByVendor,
   verifyDelivery
 };

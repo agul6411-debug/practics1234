@@ -52,11 +52,11 @@ async function uploadProof(req, res, next) {
       });
     }
 
-    // Update payment proof
+    // Update payment proof and set status to pending for admin verification
     await pool.execute(
       `UPDATE commissions 
        SET payment_proof_url = ?, 
-           status = IF(status = 'rejected', 'pending', status)
+           status = 'pending'
        WHERE id = ?`,
       [proofUrl, commissionId]
     );
@@ -112,6 +112,14 @@ async function getMyCommissions(req, res, next) {
     query += ' ORDER BY c.id DESC';
 
     const [commissions] = await pool.execute(query, values);
+
+    // Automatically mark vendor's commission notifications as read to stop repeated alerts
+    try {
+      await pool.execute(
+        "UPDATE notifications SET is_read = 1 WHERE user_id = ? AND type = 'commission'",
+        [userId]
+      );
+    } catch (_) {}
 
     res.json({
       success: true,
@@ -177,6 +185,13 @@ async function verifyCommission(req, res, next) {
       throw new Error('Commission record not found');
     }
 
+    if (commission.status === 'paid') {
+      return res.status(400).json({
+        success: false,
+        message: 'This commission has already been verified and paid.'
+      });
+    }
+
     // Mark as paid
     await pool.execute(
       `UPDATE commissions 
@@ -200,6 +215,12 @@ async function verifyCommission(req, res, next) {
       const [vendRows] = await pool.execute('SELECT * FROM vendors WHERE id = ?', [commission.vendor_id]);
       const vendorRecord = vendRows[0] || null;
       if (vendorRecord) {
+        // Mark old commission notifications as read to prevent duplicate popup/alert spam
+        await pool.execute(
+          "UPDATE notifications SET is_read = 1 WHERE user_id = ? AND type = 'commission'",
+          [vendorRecord.user_id]
+        );
+
         await pool.execute(
           `INSERT INTO notifications (user_id, message, type, is_read)
            VALUES (?, 'Your commission payment was verified. Your leads with this customer are now unlocked.', 'commission', 0)`,

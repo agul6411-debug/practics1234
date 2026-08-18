@@ -1,7 +1,12 @@
 const pool = require('../db');
 const { hashPassword, comparePassword, generateToken } = require('../utils');
+const { sendOtpEmail } = require('../utils/emailService');
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function generate6DigitOtp() {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
 
 /**
  * Helper to validate user fields for registration
@@ -41,20 +46,30 @@ async function registerCustomer(req, res, next) {
       throw new Error('Email address already registered');
     }
 
-    // Hash password and create user record
+    const otp = generate6DigitOtp();
     const hashedPassword = await hashPassword(password);
     const [userResult] = await pool.execute(
-      'INSERT INTO users (name, email, password, phone, role) VALUES (?, ?, ?, ?, ?)',
-      [name, email, hashedPassword, phone || null, 'customer']
+      `INSERT INTO users (name, email, password, phone, role, is_email_verified, email_otp, otp_expires_at) 
+       VALUES (?, ?, ?, ?, ?, 0, ?, DATE_ADD(NOW(), INTERVAL 10 MINUTE))`,
+      [name, email, hashedPassword, phone || null, 'customer', otp]
     );
     const userId = userResult.insertId;
 
     // Create customer profile
     await pool.execute('INSERT INTO customers (user_id, city) VALUES (?, ?)', [userId, city]);
 
+    // Send OTP via Mailtrap
+    try {
+      await sendOtpEmail(email, otp);
+    } catch (mailErr) {
+      console.error('Mailtrap OTP Send Failed:', mailErr.message);
+    }
+
     res.status(201).json({
       success: true,
-      message: 'Customer registered successfully. Please login to continue.'
+      requires_email_verification: true,
+      email: email,
+      message: 'Customer registered! An OTP code has been sent to your email for verification.'
     });
   } catch (error) {
     next(error);
@@ -92,11 +107,12 @@ async function registerVendor(req, res, next) {
       throw new Error('Email address already registered');
     }
 
-    // Hash password and create user record
+    const otp = generate6DigitOtp();
     const hashedPassword = await hashPassword(password);
     const [userResult] = await pool.execute(
-      'INSERT INTO users (name, email, password, phone, role) VALUES (?, ?, ?, ?, ?)',
-      [name, email, hashedPassword, phone || null, 'vendor']
+      `INSERT INTO users (name, email, password, phone, role, is_email_verified, email_otp, otp_expires_at) 
+       VALUES (?, ?, ?, ?, ?, 0, ?, DATE_ADD(NOW(), INTERVAL 10 MINUTE))`,
+      [name, email, hashedPassword, phone || null, 'vendor', otp]
     );
     const userId = userResult.insertId;
 
@@ -115,9 +131,91 @@ async function registerVendor(req, res, next) {
       ]
     );
 
+    // Send OTP via Mailtrap
+    try {
+      await sendOtpEmail(email, otp);
+    } catch (mailErr) {
+      console.error('Mailtrap OTP Send Failed:', mailErr.message);
+    }
+
     res.status(201).json({
       success: true,
-      message: 'Vendor registered successfully. Please login to continue.'
+      requires_email_verification: true,
+      email: email,
+      message: 'Vendor registered! An OTP code has been sent to your email for verification.'
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Resends / Sends a 6-digit Email Verification OTP
+ */
+async function sendOtp(req, res, next) {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      res.status(400);
+      throw new Error('Email is required');
+    }
+
+    const [userRows] = await pool.execute('SELECT * FROM users WHERE email = ?', [email]);
+    if (userRows.length === 0) {
+      res.status(404);
+      throw new Error('No account found with this email address');
+    }
+
+    const otp = generate6DigitOtp();
+    await pool.execute(
+      'UPDATE users SET email_otp = ?, otp_expires_at = DATE_ADD(NOW(), INTERVAL 10 MINUTE) WHERE email = ?',
+      [otp, email]
+    );
+
+    await sendOtpEmail(email, otp);
+
+    res.json({
+      success: true,
+      message: `Verification OTP code sent to ${email}`
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Verifies submitted Email OTP code
+ */
+async function verifyOtp(req, res, next) {
+  try {
+    const { email, otp } = req.body;
+    if (!email || !otp) {
+      res.status(400);
+      throw new Error('Email and OTP code are required');
+    }
+
+    const [userRows] = await pool.execute(
+      `SELECT * FROM users 
+       WHERE email = ? AND email_otp = ? AND (otp_expires_at IS NULL OR otp_expires_at > NOW())`,
+      [email, otp.trim()]
+    );
+
+    if (userRows.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: '🚨 Invalid or expired OTP code. Please request a new OTP.'
+      });
+    }
+
+    const user = userRows[0];
+    await pool.execute(
+      'UPDATE users SET is_email_verified = 1, email_otp = NULL, otp_expires_at = NULL WHERE id = ?',
+      [user.id]
+    );
+
+    res.json({
+      success: true,
+      message: '✅ Email address verified successfully! You can now login.'
     });
   } catch (error) {
     next(error);
@@ -157,6 +255,27 @@ async function login(req, res, next) {
       throw new Error('Your account is blocked. Please contact an administrator.');
     }
 
+    // Check Email OTP Verification status
+    if (user.is_email_verified == 0 || user.is_email_verified == false) {
+      const otp = generate6DigitOtp();
+      await pool.execute(
+        'UPDATE users SET email_otp = ?, otp_expires_at = DATE_ADD(NOW(), INTERVAL 10 MINUTE) WHERE id = ?',
+        [otp, user.id]
+      );
+      try {
+        await sendOtpEmail(user.email, otp);
+      } catch (mailErr) {
+        console.error('Mailtrap OTP Send Failed on login:', mailErr.message);
+      }
+
+      return res.status(403).json({
+        success: false,
+        requires_email_verification: true,
+        email: user.email,
+        message: '🚨 Email address not verified yet! A new 6-digit OTP code has been sent to your email.'
+      });
+    }
+
     // Load respective profile info
     let profile = {};
     if (user.role === 'customer') {
@@ -182,7 +301,7 @@ async function login(req, res, next) {
           longitude: vendorProfile.longitude,
           verification_status: vendorProfile.verification_status,
           security_deposit_status: vendorProfile.security_deposit_status || 'unpaid',
-          security_deposit_amount: vendorProfile.security_deposit_amount || 5000.00,
+          security_deposit_amount: vendorProfile.security_deposit_amount || 500.00,
           security_deposit_proof: vendorProfile.security_deposit_proof || null
         };
       }
@@ -198,6 +317,7 @@ async function login(req, res, next) {
         id: user.id,
         name: user.name,
         email: user.email,
+        phone: user.phone,
         role: user.role,
         status: user.status,
         ...profile
@@ -211,5 +331,7 @@ async function login(req, res, next) {
 module.exports = {
   registerCustomer,
   registerVendor,
+  sendOtp,
+  verifyOtp,
   login
 };

@@ -22,26 +22,35 @@ async function addPart(req, res, next) {
       });
     }
 
-    const { brand_id, part_type_id, model_name, price, condition_type, stock_quantity, barcode_number } = req.body;
+    const { brand_id, part_type_id, model_name, price, condition_type, stock_quantity, barcode_number, code_type } = req.body;
 
     if (!brand_id || !part_type_id || !model_name || !price || !condition_type) {
       res.status(400);
       throw new Error('Required fields missing: brand_id, part_type_id, model_name, price, condition_type');
     }
 
-    if (!barcode_number || barcode_number.trim() === '' || barcode_number === 'null') {
+    let cleanBarcode = (barcode_number && barcode_number.trim() !== '' && barcode_number !== 'null')
+      ? barcode_number.trim()
+      : null;
+
+    const isQrType = code_type === 'qr' || (cleanBarcode && (cleanBarcode.toLowerCase().startsWith('qr') || cleanBarcode.includes(':') || cleanBarcode.length > 20));
+
+    if (!isQrType && (!cleanBarcode || cleanBarcode === '')) {
       return res.status(400).json({
         success: false,
-        message: 'Barcode / QR Code number is strictly required for all product listings.'
+        message: 'Barcode number is strictly required when listing a Barcode product.'
       });
+    }
+
+    if (!cleanBarcode) {
+      // Auto-generate unique QR Code Token for QR products
+      cleanBarcode = `QR-PART-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
     }
 
     if (!req.files || !req.files['originalPhoto'] || !req.files['barcodePhoto']) {
       res.status(400);
       throw new Error('Required authenticity files missing: originalPhoto and barcodePhoto must be uploaded');
     }
-
-    const cleanBarcode = barcode_number.trim();
 
     if (cleanBarcode) {
       const [existingParts] = await pool.execute(

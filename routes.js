@@ -23,6 +23,8 @@ const router = express.Router();
 router.post('/auth/register/customer', authController.registerCustomer);
 router.post('/auth/register/vendor', authController.registerVendor);
 router.post('/auth/login', authController.login);
+router.post('/auth/send-otp', authController.sendOtp);
+router.post('/auth/verify-otp', authController.verifyOtp);
 
 // =========================================================================
 // 2. Vendor Routes (/api/vendor)
@@ -50,6 +52,7 @@ router.delete('/vendor/parts/:id', verifyToken, authorizeRoles('vendor'), partCo
 
 router.get('/vendor/requests', verifyToken, authorizeRoles('vendor'), requestController.getVendorRequests);
 router.put('/vendor/requests/:id/respond', verifyToken, authorizeRoles('vendor'), requestController.respondToRequest);
+router.put('/vendor/requests/:id/cancel', verifyToken, authorizeRoles('vendor'), requestController.cancelRequestByVendor);
 
 router.get('/vendor/commissions', verifyToken, authorizeRoles('vendor'), commissionController.getMyCommissions);
 router.post(
@@ -104,6 +107,7 @@ router.get('/admin/vendors', verifyToken, authorizeRoles('admin'), adminControll
 router.put('/admin/vendors/:id/approve', verifyToken, authorizeRoles('admin'), adminController.approveVendor);
 router.put('/admin/vendors/:id/reject', verifyToken, authorizeRoles('admin'), adminController.rejectVendor);
 router.put('/admin/vendors/:id/verify-deposit', verifyToken, authorizeRoles('admin'), adminController.verifyVendorDeposit);
+router.put('/admin/vendors/:id/reject-deposit', verifyToken, authorizeRoles('admin'), adminController.rejectVendorDeposit);
 
 router.get('/admin/users', verifyToken, authorizeRoles('admin'), adminController.getAllUsers);
 router.put('/admin/users/:id/block', verifyToken, authorizeRoles('admin'), adminController.blockUser);

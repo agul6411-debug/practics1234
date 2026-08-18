@@ -11,7 +11,7 @@ async function getAllVendors(req, res, next) {
       SELECT 
         v.id as vendor_id, v.user_id, v.shop_name, v.verification_docs, v.city, v.address,
         v.latitude, v.longitude, v.verification_status, v.security_deposit_status,
-        v.security_deposit_proof, v.security_deposit_amount, v.created_at as vendor_created_at,
+        v.security_deposit_proof, v.security_deposit_amount, v.cancellation_count, v.created_at as vendor_created_at,
         u.name as owner_name, u.email as owner_email, u.phone as owner_phone, u.status as account_status
       FROM vendors v
       JOIN users u ON v.user_id = u.id
@@ -44,8 +44,11 @@ async function approveVendor(req, res, next) {
   try {
     const vendorId = req.params.id;
 
-    // Update status
-    await pool.execute('UPDATE vendors SET verification_status = ? WHERE id = ?', ['approved', vendorId]);
+    // Update status - approve vendor and automatically set security deposit status to paid
+    await pool.execute(
+      "UPDATE vendors SET verification_status = 'approved', security_deposit_status = 'paid' WHERE id = ?",
+      [vendorId]
+    );
 
     // Trigger notification to vendor user (wrapped in try/catch)
     try {
@@ -274,18 +277,34 @@ async function verifyVendorDeposit(req, res, next) {
   try {
     const vendorId = req.params.id;
 
+    const [vendRows] = await pool.execute('SELECT * FROM vendors WHERE id = ?', [vendorId]);
+    const vendorRecord = vendRows[0] || null;
+    if (!vendorRecord) {
+      res.status(404);
+      throw new Error('Vendor profile not found');
+    }
+
+    if (vendorRecord.security_deposit_status === 'paid') {
+      return res.status(400).json({
+        success: false,
+        message: 'Vendor security deposit is already verified and marked as paid'
+      });
+    }
+
     await pool.execute('UPDATE vendors SET security_deposit_status = ? WHERE id = ?', ['paid', vendorId]);
 
     try {
-      const [vendRows] = await pool.execute('SELECT * FROM vendors WHERE id = ?', [vendorId]);
-      const vendorRecord = vendRows[0] || null;
-      if (vendorRecord) {
-        await pool.execute(
-          `INSERT INTO notifications (user_id, message, type, is_read)
-           VALUES (?, 'Your Security Deposit has been verified & approved! You can now respond to customer leads.', 'system', 0)`,
-          [vendorRecord.user_id]
-        );
-      }
+      // Mark older deposit notifications as read to prevent spam
+      await pool.execute(
+        "UPDATE notifications SET is_read = 1 WHERE user_id = ? AND message LIKE '%Security Deposit%'",
+        [vendorRecord.user_id]
+      );
+
+      await pool.execute(
+        `INSERT INTO notifications (user_id, message, type, is_read)
+         VALUES (?, 'Your Security Deposit has been verified & approved! You can now respond to customer leads.', 'system', 0)`,
+        [vendorRecord.user_id]
+      );
     } catch (notifErr) {
       console.error('Notification creation failed in verifyVendorDeposit:', notifErr.message);
     }
@@ -299,11 +318,44 @@ async function verifyVendorDeposit(req, res, next) {
   }
 }
 
+/**
+ * Sets vendor security_deposit_status to 'rejected'.
+ */
+async function rejectVendorDeposit(req, res, next) {
+  try {
+    const vendorId = req.params.id;
+
+    await pool.execute('UPDATE vendors SET security_deposit_status = ? WHERE id = ?', ['rejected', vendorId]);
+
+    try {
+      const [vendRows] = await pool.execute('SELECT * FROM vendors WHERE id = ?', [vendorId]);
+      const vendorRecord = vendRows[0] || null;
+      if (vendorRecord) {
+        await pool.execute(
+          `INSERT INTO notifications (user_id, message, type, is_read)
+           VALUES (?, 'Your Security Deposit receipt photo was rejected. Please upload a valid JazzCash/EasyPaisa receipt photo.', 'system', 0)`,
+          [vendorRecord.user_id]
+        );
+      }
+    } catch (notifErr) {
+      console.error('Notification creation failed in rejectVendorDeposit:', notifErr.message);
+    }
+
+    res.json({
+      success: true,
+      message: 'Vendor security deposit marked as rejected'
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   getAllVendors,
   approveVendor,
   rejectVendor,
   verifyVendorDeposit,
+  rejectVendorDeposit,
   getAllUsers,
   blockUser,
   unblockUser,
