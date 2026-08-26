@@ -41,7 +41,7 @@ async function getMyProfile(req, res, next) {
         longitude: vendorProfile.longitude,
         verification_status: vendorProfile.verification_status,
         security_deposit_status: vendorProfile.security_deposit_status || 'unpaid',
-        security_deposit_amount: vendorProfile.security_deposit_amount || 5000.00,
+        security_deposit_amount: vendorProfile.security_deposit_amount || 500.00,
         security_deposit_proof: vendorProfile.security_deposit_proof || null,
         created_at: vendorProfile.created_at
       }
@@ -110,7 +110,7 @@ async function submitSecurityDepositProof(req, res, next) {
       : null;
 
     if (req.file) {
-      proofUrl = '/uploads/parts/' + req.file.filename;
+      proofUrl = '/uploads/commissions/' + req.file.filename;
     }
 
     if (!proofUrl) {

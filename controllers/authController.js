@@ -62,7 +62,7 @@ async function registerCustomer(req, res, next) {
     try {
       await sendOtpEmail(email, otp);
     } catch (mailErr) {
-      console.error('Mailtrap OTP Send Failed:', mailErr.message);
+      console.error('Gmail OTP Send Failed:', mailErr.message);
     }
 
     res.status(201).json({
@@ -135,7 +135,7 @@ async function registerVendor(req, res, next) {
     try {
       await sendOtpEmail(email, otp);
     } catch (mailErr) {
-      console.error('Mailtrap OTP Send Failed:', mailErr.message);
+      console.error('Gmail OTP Send Failed:', mailErr.message);
     }
 
     res.status(201).json({
@@ -265,7 +265,7 @@ async function login(req, res, next) {
       try {
         await sendOtpEmail(user.email, otp);
       } catch (mailErr) {
-        console.error('Mailtrap OTP Send Failed on login:', mailErr.message);
+        console.error('Gmail OTP Send Failed on login:', mailErr.message);
       }
 
       return res.status(403).json({

@@ -1,27 +1,26 @@
 const nodemailer = require('nodemailer');
 
-// Mailtrap SMTP Transport Configuration as requested
+// Real Gmail SMTP Transport Configuration
 const transporter = nodemailer.createTransport({
-  host: "sandbox.smtp.mailtrap.io",
-  port: 2525,
+  service: 'gmail',
   auth: {
-    user: "19ea0dd760ec8b",
-    pass: "d563d6c3660254"
+    user: 'finderteamphone@gmail.com',
+    pass: 'njzj nogx sfoi qeyl'
   }
 });
 
 /**
- * Sends a 6-digit Email Verification OTP
+ * Sends a 6-digit Email Verification OTP via Gmail
  * @param {string} toEmail - Recipient email address
  * @param {string} otp - 6-digit OTP code
  */
 async function sendOtpEmail(toEmail, otp) {
   const mailOptions = {
-    from: '"Phone Part Finder" <no-reply@phonepartfinder.com>',
+    from: '"Phone Part Finder" <finderteamphone@gmail.com>',
     to: toEmail,
     subject: "🔑 Your Email Verification OTP Code - Phone Part Finder",
     html: `
-      <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; borderRadius: 12px; background-color: #ffffff;">
+      <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">
         <div style="text-align: center; margin-bottom: 20px;">
           <h2 style="color: #0284c7; margin: 0;">📱 Phone Part Finder</h2>
           <p style="color: #64748b; font-size: 14px;">Marketplace & Part Verification System</p>
@@ -41,22 +40,20 @@ async function sendOtpEmail(toEmail, otp) {
         </p>
         <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 20px 0;" />
         <p style="color: #94a3b8; font-size: 12px; text-align: center;">
-          If you did not request this email, please ignore this message or contact support.
+          If you did not request this email, please ignore this message.
         </p>
       </div>
     `
   };
 
-  return new Promise((resolve, reject) => {
-    transporter.sendMail(mailOptions, (error, info) => {
-      if (error) {
-        console.error("❌ Mailtrap Email Error:", error.message);
-        return reject(error);
-      }
-      console.log("✅ OTP Email sent via Mailtrap! MessageId: %s", info.messageId);
-      resolve(info);
-    });
-  });
+  try {
+    const info = await transporter.sendMail(mailOptions);
+    console.log("✅ OTP Email sent via Gmail! MessageId: %s", info.messageId);
+    return info;
+  } catch (error) {
+    console.error("❌ Gmail Email Error:", error.message);
+    throw error;
+  }
 }
 
 module.exports = {

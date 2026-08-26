@@ -97,6 +97,18 @@ CREATE TABLE commissions (
   FOREIGN KEY (verified_by) REFERENCES users(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB;
 
+-- Chat Rooms table for customer-vendor messaging
+CREATE TABLE chat_rooms (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  customer_id INT NOT NULL,
+  vendor_id INT NOT NULL,
+  part_id INT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE,
+  FOREIGN KEY (vendor_id) REFERENCES vendors(id) ON DELETE CASCADE,
+  FOREIGN KEY (part_id) REFERENCES parts(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
 -- Reviews table to store customer feedback on vendor service
 CREATE TABLE reviews (
   id INT AUTO_INCREMENT PRIMARY KEY,

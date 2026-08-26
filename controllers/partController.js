@@ -327,12 +327,16 @@ async function getPartDetails(req, res, next) {
         p.*,
         b.name as brand_name,
         pt.name as part_type_name,
-        v.user_id as vendor_user_id, v.shop_name, v.city as vendor_city, v.address as vendor_address
+        v.user_id as vendor_user_id, v.shop_name, v.city as vendor_city, v.address as vendor_address,
+        COALESCE(ROUND(AVG(rv.rating), 1), 0) as average_rating,
+        COUNT(rv.id) as review_count
       FROM parts p
       JOIN vendors v ON p.vendor_id = v.id
       LEFT JOIN brands b ON p.brand_id = b.id
       LEFT JOIN part_types pt ON p.part_type_id = pt.id
-      WHERE p.id = ?`,
+      LEFT JOIN reviews rv ON rv.vendor_id = v.id
+      WHERE p.id = ?
+      GROUP BY p.id, b.id, pt.id, v.id`,
       [partId]
     );
     const part = rows[0] || null;

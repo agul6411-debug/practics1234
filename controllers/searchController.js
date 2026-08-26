@@ -41,7 +41,7 @@ async function executeSearch({ brandId, partTypeId, model, city }) {
     LEFT JOIN part_types pt ON p.part_type_id = pt.id
     LEFT JOIN reviews rv ON rv.vendor_id = v.id
     WHERE ${conditions.join(' AND ')}
-    GROUP BY p.id
+    GROUP BY p.id, b.id, pt.id, v.id
     ORDER BY p.created_at DESC
   `;
 

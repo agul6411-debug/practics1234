@@ -21,7 +21,7 @@ async function uploadProof(req, res, next) {
       : null;
 
     if (req.file) {
-      proofUrl = '/uploads/parts/' + req.file.filename;
+      proofUrl = '/uploads/commissions/' + req.file.filename;
     }
 
     if (!proofUrl) {
