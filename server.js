@@ -9,7 +9,7 @@ const routes = require('./routes');
 const { errorHandler } = require('./middleware');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3005;
 
 // Ensure upload directories exist
 fs.mkdirSync(path.join(__dirname, 'uploads/parts'), { recursive: true });
