@@ -48,7 +48,7 @@ async function sendOtpEmail(toEmail, otp) {
 
   try {
     const info = await transporter.sendMail(mailOptions);
-    console.log("✅ OTP Email sent via Gmail! MessageId: %s", info.messageId);
+    console.log("✅ OTP Email sent via Gmail! check your  MessageId: %s", info.messageId);
     return info;
   } catch (error) {
     console.error("❌ Gmail Email Error:", error.message);

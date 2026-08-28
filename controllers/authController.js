@@ -328,10 +328,98 @@ async function login(req, res, next) {
   }
 }
 
+/**
+ * Request Password Reset OTP
+ */
+async function forgotPassword(req, res, next) {
+  try {
+    const { email } = req.body;
+    if (!email || !EMAIL_REGEX.test(email.trim())) {
+      res.status(400);
+      throw new Error('Valid email address is required');
+    }
+
+    const [userRows] = await pool.execute('SELECT * FROM users WHERE email = ?', [email.trim()]);
+    if (userRows.length === 0) {
+      res.status(404);
+      throw new Error('No account found with this email address');
+    }
+
+    const otp = generate6DigitOtp();
+    await pool.execute(
+      'UPDATE users SET email_otp = ?, otp_expires_at = DATE_ADD(NOW(), INTERVAL 10 MINUTE) WHERE email = ?',
+      [otp, email.trim()]
+    );
+
+    try {
+      await sendOtpEmail(email.trim(), otp);
+    } catch (mailErr) {
+      console.error('Gmail Reset Password OTP Send Failed:', mailErr.message);
+    }
+
+    res.json({
+      success: true,
+      message: `Password reset OTP code has been sent to ${email.trim()}`
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Reset Password with OTP Code
+ */
+async function resetPassword(req, res, next) {
+  try {
+    const { email, otp, new_password } = req.body;
+    if (!email || !otp || !new_password) {
+      res.status(400);
+      throw new Error('Required fields missing: email, otp, new_password');
+    }
+
+    if (new_password.length < 6) {
+      res.status(400);
+      throw new Error('New password must be at least 6 characters long');
+    }
+
+    const [userRows] = await pool.execute(
+      `SELECT * FROM users 
+       WHERE email = ? AND email_otp = ? AND (otp_expires_at IS NULL OR otp_expires_at > NOW())`,
+      [email.trim(), otp.trim()]
+    );
+
+    if (userRows.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: '🚨 Invalid or expired OTP code. Please request a new password reset.'
+      });
+    }
+
+    const user = userRows[0];
+    const hashedPassword = await hashPassword(new_password);
+
+    await pool.execute(
+      `UPDATE users 
+       SET password = ?, is_email_verified = 1, email_otp = NULL, otp_expires_at = NULL 
+       WHERE id = ?`,
+      [hashedPassword, user.id]
+    );
+
+    res.json({
+      success: true,
+      message: '✅ Password reset successfully! You can now login with your new password.'
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   registerCustomer,
   registerVendor,
   sendOtp,
   verifyOtp,
-  login
+  login,
+  forgotPassword,
+  resetPassword
 };

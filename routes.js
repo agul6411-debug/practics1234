@@ -25,6 +25,8 @@ router.post('/auth/register/vendor', authController.registerVendor);
 router.post('/auth/login', authController.login);
 router.post('/auth/send-otp', authController.sendOtp);
 router.post('/auth/verify-otp', authController.verifyOtp);
+router.post('/auth/forgot-password', authController.forgotPassword);
+router.post('/auth/reset-password', authController.resetPassword);
 
 // =========================================================================
 // 2. Vendor Routes (/api/vendor)
