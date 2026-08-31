@@ -81,11 +81,16 @@ async function createRequest(req, res, next) {
     const delPhone = delivery_phone && delivery_phone.trim() !== '' ? delivery_phone.trim() : null;
     const delNotes = delivery_notes && delivery_notes.trim() !== '' ? delivery_notes.trim() : null;
 
-    // Create request with Home Delivery details
+    // Calculate delivery fee (Rs. 200 for home delivery) & total bill amount
+    const partPrice = Number(part.price) || 0.00;
+    const deliveryFee = delType === 'home_delivery' ? 200.00 : 0.00;
+    const totalAmount = Number((partPrice + deliveryFee).toFixed(2));
+
+    // Create request with Home Delivery details and Total Bill
     const [requestResult] = await pool.execute(
-      `INSERT INTO requests (customer_id, vendor_id, part_id, sequence_number, is_locked, status, delivery_type, delivery_address, delivery_city, delivery_phone, delivery_notes)
-       VALUES (?, ?, ?, ?, ?, 'requested', ?, ?, ?, ?, ?)`,
-      [customer.id, vendorId, part_id, sequenceNumber, isLocked ? 1 : 0, delType, delAddress, delCity, delPhone, delNotes]
+      `INSERT INTO requests (customer_id, vendor_id, part_id, sequence_number, is_locked, status, delivery_type, delivery_address, delivery_city, delivery_phone, delivery_notes, delivery_fee, total_amount)
+       VALUES (?, ?, ?, ?, ?, 'requested', ?, ?, ?, ?, ?, ?, ?)`,
+      [customer.id, vendorId, part_id, sequenceNumber, isLocked ? 1 : 0, delType, delAddress, delCity, delPhone, delNotes, deliveryFee, totalAmount]
     );
     const requestId = requestResult.insertId;
 
@@ -161,6 +166,7 @@ async function getMyRequests(req, res, next) {
       `SELECT 
         r.id, r.sequence_number, r.is_locked, r.status, r.created_at,
         r.delivery_type, r.delivery_address, r.delivery_city, r.delivery_phone, r.delivery_notes,
+        r.delivery_fee, r.total_amount,
         r.cancellation_reason, r.cancelled_by, r.cancelled_at,
         p.id as part_id, p.model_name, p.price, p.image_url,
         v.id as vendor_id, v.user_id as vendor_user_id, v.shop_name, v.city as vendor_city, v.address as vendor_address,
@@ -204,6 +210,7 @@ async function getVendorRequests(req, res, next) {
       `SELECT 
         r.id, r.customer_id, r.vendor_id, r.part_id, r.sequence_number, r.is_locked, r.status, r.created_at,
         r.delivery_type, r.delivery_address, r.delivery_city, r.delivery_phone, r.delivery_notes,
+        r.delivery_fee, r.total_amount,
         r.cancellation_reason, r.cancelled_by, r.cancelled_at,
         p.model_name, p.price, p.condition_type, p.image_url,
         u.id as customer_user_id, u.name as customer_name, u.phone as customer_phone, u.email as customer_email,
@@ -228,6 +235,8 @@ async function getVendorRequests(req, res, next) {
           is_locked: true,
           status: reqItem.status,
           delivery_type: reqItem.delivery_type,
+          delivery_fee: reqItem.delivery_fee,
+          total_amount: reqItem.total_amount,
           created_at: reqItem.created_at,
           model_name: reqItem.model_name,
           price: reqItem.price,
@@ -253,6 +262,8 @@ async function getVendorRequests(req, res, next) {
           delivery_city: reqItem.delivery_city,
           delivery_phone: reqItem.delivery_phone,
           delivery_notes: reqItem.delivery_notes,
+          delivery_fee: reqItem.delivery_fee,
+          total_amount: reqItem.total_amount,
           cancellation_reason: reqItem.cancellation_reason,
           cancelled_by: reqItem.cancelled_by,
           cancelled_at: reqItem.cancelled_at,

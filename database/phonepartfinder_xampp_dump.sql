@@ -36,6 +36,8 @@ CREATE TABLE `vendors` (
   `user_id` INT NOT NULL,
   `shop_name` VARCHAR(150) NOT NULL,
   `verification_docs` VARCHAR(255) DEFAULT NULL,
+  `shop_photo_url` VARCHAR(255) DEFAULT NULL,
+  `cnic_photo_url` VARCHAR(255) DEFAULT NULL,
   `city` VARCHAR(100) NOT NULL,
   `address` VARCHAR(255) NOT NULL,
   `latitude` DECIMAL(10,8) DEFAULT NULL,
@@ -120,6 +122,8 @@ CREATE TABLE `requests` (
   `delivery_city` VARCHAR(100) DEFAULT NULL,
   `delivery_phone` VARCHAR(20) DEFAULT NULL,
   `delivery_notes` TEXT DEFAULT NULL,
+  `delivery_fee` DECIMAL(10,2) DEFAULT 0.00,
+  `total_amount` DECIMAL(10,2) DEFAULT 0.00,
   `verified_barcode` VARCHAR(100) DEFAULT NULL,
   `verified_at` TIMESTAMP NULL DEFAULT NULL,
   `cancellation_reason` TEXT DEFAULT NULL,
@@ -280,10 +284,10 @@ INSERT INTO `part_types` (`name`) VALUES
 ON DUPLICATE KEY UPDATE `name` = VALUES(`name`);
 
 -- ----------------------------------------------------------------------------
--- Seed Data: Default Admin User (Password: admin123)
+-- Seed Data: Default Admin User (Email: finderteamphone@gmail.com, Password: admin1234)
 -- ----------------------------------------------------------------------------
 INSERT INTO `users` (`name`, `email`, `password`, `phone`, `role`, `status`, `is_email_verified`) VALUES
-('System Admin', 'admin@gmail.com', '$2a$10$wTkyrL1lQx.Z7b3h/GkSje4tJ1F4U0lM.S/.7j/YwLgLz/E0jRk/S', '+923000000000', 'admin', 'active', 1)
-ON DUPLICATE KEY UPDATE `status` = 'active';
+('System Admin', 'finderteamphone@gmail.com', '$2b$10$IlsE4yCKZzNe.er6p28Jv.goGLtCeneHgWtpQFdYkUyFjhFPFga32', '+923000000000', 'admin', 'active', 1)
+ON DUPLICATE KEY UPDATE `email` = VALUES(`email`), `password` = VALUES(`password`), `status` = 'active';
 
 -- End of SQL Export Dump

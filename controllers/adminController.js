@@ -9,7 +9,7 @@ async function getAllVendors(req, res, next) {
 
     let query = `
       SELECT 
-        v.id as vendor_id, v.user_id, v.shop_name, v.verification_docs, v.city, v.address,
+        v.id as vendor_id, v.user_id, v.shop_name, v.verification_docs, v.shop_photo_url, v.cnic_photo_url, v.city, v.address,
         v.latitude, v.longitude, v.verification_status, v.security_deposit_status,
         v.security_deposit_proof, v.security_deposit_amount, v.cancellation_count, v.created_at as vendor_created_at,
         u.name as owner_name, u.email as owner_email, u.phone as owner_phone, u.status as account_status
@@ -44,9 +44,9 @@ async function approveVendor(req, res, next) {
   try {
     const vendorId = req.params.id;
 
-    // Update status - approve vendor and automatically set security deposit status to paid
+    // Update status - approve vendor shop (security deposit remains separate and must be paid/verified)
     await pool.execute(
-      "UPDATE vendors SET verification_status = 'approved', security_deposit_status = 'paid' WHERE id = ?",
+      "UPDATE vendors SET verification_status = 'approved' WHERE id = ?",
       [vendorId]
     );
 
@@ -350,6 +350,78 @@ async function rejectVendorDeposit(req, res, next) {
   }
 }
 
+/**
+ * Admin Audit: View ALL system notification logs across all users
+ */
+async function getAllNotificationsAdmin(req, res, next) {
+  try {
+    const [rows] = await pool.execute(`
+      SELECT 
+        n.id, n.user_id, n.message, n.type, n.is_read, n.created_at,
+        u.name as user_name, u.email as user_email, u.role as user_role
+      FROM notifications n
+      JOIN users u ON n.user_id = u.id
+      ORDER BY n.created_at DESC, n.id DESC
+    `);
+
+    res.json({
+      success: true,
+      count: rows.length,
+      data: rows
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Admin Superior: Send/Broadcast custom notification to specific user or groups (vendors, customers, all)
+ */
+async function broadcastNotificationAdmin(req, res, next) {
+  try {
+    const { target_role, target_user_id, message, type } = req.body;
+
+    if (!message || message.trim() === '') {
+      res.status(400);
+      throw new Error('Notification message content is required');
+    }
+
+    const notifType = type || 'system';
+    const cleanMsg = message.trim();
+
+    if (target_user_id) {
+      await pool.execute(
+        'INSERT INTO notifications (user_id, message, type, is_read) VALUES (?, ?, ?, 0)',
+        [target_user_id, cleanMsg, notifType]
+      );
+    } else if (target_role === 'vendor' || target_role === 'customer') {
+      const [users] = await pool.execute('SELECT id FROM users WHERE role = ?', [target_role]);
+      for (const u of users) {
+        await pool.execute(
+          'INSERT INTO notifications (user_id, message, type, is_read) VALUES (?, ?, ?, 0)',
+          [u.id, cleanMsg, notifType]
+        );
+      }
+    } else {
+      // Broadcast to ALL users
+      const [users] = await pool.execute('SELECT id FROM users');
+      for (const u of users) {
+        await pool.execute(
+          'INSERT INTO notifications (user_id, message, type, is_read) VALUES (?, ?, ?, 0)',
+          [u.id, cleanMsg, notifType]
+        );
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'Notification broadcast successfully!'
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   getAllVendors,
   approveVendor,
@@ -361,5 +433,7 @@ module.exports = {
   unblockUser,
   getDashboardStats,
   getPublicSettings,
-  updateSystemSettings
+  updateSystemSettings,
+  getAllNotificationsAdmin,
+  broadcastNotificationAdmin
 };

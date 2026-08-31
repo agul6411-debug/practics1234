@@ -6,7 +6,7 @@ const poolConfig = {
   port: parseInt(process.env.DB_PORT || '3306', 10),
   user: process.env.DB_USER || 'admin',
   password: process.env.DB_PASSWORD || 'YourStrongPassword',
-  database: process.env.DB_NAME || 'phone_parts_finder',
+  database: process.env.DB_NAME || 'phonepartsfinder',
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0

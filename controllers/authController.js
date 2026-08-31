@@ -107,6 +107,19 @@ async function registerVendor(req, res, next) {
       throw new Error('Email address already registered');
     }
 
+    // Handle shopPhoto and cnicPhoto file uploads
+    let shopPhotoUrl = null;
+    let cnicPhotoUrl = null;
+
+    if (req.files) {
+      if (req.files.shopPhoto && req.files.shopPhoto[0]) {
+        shopPhotoUrl = `/uploads/parts/${req.files.shopPhoto[0].filename}`;
+      }
+      if (req.files.cnicPhoto && req.files.cnicPhoto[0]) {
+        cnicPhotoUrl = `/uploads/parts/${req.files.cnicPhoto[0].filename}`;
+      }
+    }
+
     const otp = generate6DigitOtp();
     const hashedPassword = await hashPassword(password);
     const [userResult] = await pool.execute(
@@ -116,20 +129,33 @@ async function registerVendor(req, res, next) {
     );
     const userId = userResult.insertId;
 
-    // Create vendor profile
+    // Create vendor profile with shop photo and CNIC photo
     await pool.execute(
-      `INSERT INTO vendors (user_id, shop_name, verification_docs, city, address, latitude, longitude, verification_status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')`,
+      `INSERT INTO vendors (user_id, shop_name, verification_docs, shop_photo_url, cnic_photo_url, city, address, latitude, longitude, verification_status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
       [
         userId,
         shop_name,
-        verification_docs || null,
+        verification_docs || shopPhotoUrl || null,
+        shopPhotoUrl,
+        cnicPhotoUrl,
         city,
         address,
         latitude !== undefined && latitude !== null ? latitude : null,
         longitude !== undefined && longitude !== null ? longitude : null
       ]
     );
+
+    // Create initial Security Deposit notification
+    try {
+      await pool.execute(
+        `INSERT INTO notifications (user_id, message, type, is_read)
+         VALUES (?, '⚠️ SECURITY DEPOSIT REQUIRED: Please pay Rs. 500 refundable deposit via JazzCash/EasyPaisa (+92 311 7595866) to respond to customer part requests.', 'system', 0)`,
+        [userId]
+      );
+    } catch (notifErr) {
+      console.error('Notification creation failed for vendor deposit:', notifErr.message);
+    }
 
     // Send OTP via Mailtrap
     try {
@@ -295,6 +321,8 @@ async function login(req, res, next) {
           vendor_id: vendorProfile.id,
           shop_name: vendorProfile.shop_name,
           verification_docs: vendorProfile.verification_docs,
+          shop_photo_url: vendorProfile.shop_photo_url || null,
+          cnic_photo_url: vendorProfile.cnic_photo_url || null,
           city: vendorProfile.city,
           address: vendorProfile.address,
           latitude: vendorProfile.latitude,
@@ -302,7 +330,8 @@ async function login(req, res, next) {
           verification_status: vendorProfile.verification_status,
           security_deposit_status: vendorProfile.security_deposit_status || 'unpaid',
           security_deposit_amount: vendorProfile.security_deposit_amount || 500.00,
-          security_deposit_proof: vendorProfile.security_deposit_proof || null
+          security_deposit_proof: vendorProfile.security_deposit_proof || null,
+          created_at: vendorProfile.created_at
         };
       }
     }

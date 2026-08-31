@@ -21,7 +21,11 @@ const router = express.Router();
 // 1. Authentication Routes (/api/auth)
 // =========================================================================
 router.post('/auth/register/customer', authController.registerCustomer);
-router.post('/auth/register/vendor', authController.registerVendor);
+router.post(
+  '/auth/register/vendor',
+  upload.fields([{ name: 'shopPhoto', maxCount: 1 }, { name: 'cnicPhoto', maxCount: 1 }]),
+  authController.registerVendor
+);
 router.post('/auth/login', authController.login);
 router.post('/auth/send-otp', authController.sendOtp);
 router.post('/auth/verify-otp', authController.verifyOtp);
@@ -128,6 +132,8 @@ router.put('/admin/reports/:id/dismiss', verifyToken, authorizeRoles('admin'), r
 router.get('/settings/public', adminController.getPublicSettings);
 router.get('/admin/settings', verifyToken, authorizeRoles('admin'), adminController.getPublicSettings);
 router.put('/admin/settings', verifyToken, authorizeRoles('admin'), adminController.updateSystemSettings);
+router.get('/admin/notifications', verifyToken, authorizeRoles('admin'), adminController.getAllNotificationsAdmin);
+router.post('/admin/notifications/broadcast', verifyToken, authorizeRoles('admin'), adminController.broadcastNotificationAdmin);
 router.post(
   '/vendor/security-deposit',
   verifyToken,

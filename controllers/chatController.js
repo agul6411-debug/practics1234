@@ -65,12 +65,25 @@ async function createOrGetRoom(req, res, next) {
     }
     const vendorId = part.vendor_id;
 
-    // Check if room already exists
-    const [existingRoomRows] = await pool.execute(
-      'SELECT * FROM chat_rooms WHERE customer_id = ? AND vendor_id = ? AND part_id = ?',
-      [customerId, vendorId, part_id]
-    );
+    // Helper query to get full room details with vendor/customer & part info
+    const getFullRoomQuery = `
+      SELECT 
+        cr.*,
+        p.model_name,
+        p.image_url,
+        v.shop_name as vendor_shop_name,
+        v.shop_name as other_name,
+        v.city as other_city,
+        b.name as brand_name
+      FROM chat_rooms cr
+      JOIN vendors v ON cr.vendor_id = v.id
+      JOIN parts p ON cr.part_id = p.id
+      LEFT JOIN brands b ON p.brand_id = b.id
+      WHERE cr.customer_id = ? AND cr.vendor_id = ? AND cr.part_id = ?
+    `;
 
+    // Check if room already exists
+    const [existingRoomRows] = await pool.execute(getFullRoomQuery, [customerId, vendorId, part_id]);
     let room = existingRoomRows[0] || null;
 
     if (!room) {
@@ -81,7 +94,22 @@ async function createOrGetRoom(req, res, next) {
       );
       const roomId = insertResult.insertId;
 
-      const [newRoomRows] = await pool.execute('SELECT * FROM chat_rooms WHERE id = ?', [roomId]);
+      const [newRoomRows] = await pool.execute(
+        `SELECT 
+          cr.*,
+          p.model_name,
+          p.image_url,
+          v.shop_name as vendor_shop_name,
+          v.shop_name as other_name,
+          v.city as other_city,
+          b.name as brand_name
+        FROM chat_rooms cr
+        JOIN vendors v ON cr.vendor_id = v.id
+        JOIN parts p ON cr.part_id = p.id
+        LEFT JOIN brands b ON p.brand_id = b.id
+        WHERE cr.id = ?`,
+        [roomId]
+      );
       room = newRoomRows[0];
     }
 
