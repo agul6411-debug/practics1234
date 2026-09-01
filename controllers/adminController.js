@@ -211,7 +211,7 @@ async function getPublicSettings(req, res, next) {
     const [rows] = await pool.execute('SELECT * FROM system_settings');
     const settingsMap = {
       security_deposit_amount: '500',
-      security_deposit_phone: '+92 311 7595866',
+      security_deposit_phone: '03080780593',
       commission_rate_percent: '10'
     };
     rows.forEach(r => settingsMap[r.setting_key] = r.setting_value);
@@ -333,7 +333,7 @@ async function rejectVendorDeposit(req, res, next) {
       if (vendorRecord) {
         await pool.execute(
           `INSERT INTO notifications (user_id, message, type, is_read)
-           VALUES (?, 'Your Security Deposit receipt photo was rejected. Please upload a valid JazzCash/EasyPaisa receipt photo.', 'system', 0)`,
+           VALUES (?, 'Your Security Deposit receipt photo was rejected. Please upload a valid JazzCash receipt photo.', 'system', 0)`,
           [vendorRecord.user_id]
         );
       }

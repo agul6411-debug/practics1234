@@ -249,7 +249,7 @@ SET FOREIGN_KEY_CHECKS = 1;
 -- ----------------------------------------------------------------------------
 INSERT INTO `system_settings` (`setting_key`, `setting_value`) VALUES
 ('security_deposit_amount', '500'),
-('security_deposit_phone', '+92 311 7595866'),
+('security_deposit_phone', '03080780593'),
 ('commission_rate_percent', '10'),
 ('max_vendor_cancellations', '3')
 ON DUPLICATE KEY UPDATE `setting_value` = VALUES(`setting_value`);

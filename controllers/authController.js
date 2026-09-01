@@ -150,7 +150,7 @@ async function registerVendor(req, res, next) {
     try {
       await pool.execute(
         `INSERT INTO notifications (user_id, message, type, is_read)
-         VALUES (?, '⚠️ SECURITY DEPOSIT REQUIRED: Please pay Rs. 500 refundable deposit via JazzCash/EasyPaisa (+92 311 7595866) to respond to customer part requests.', 'system', 0)`,
+         VALUES (?, '⚠️ SECURITY DEPOSIT REQUIRED: Please pay Rs. 500 refundable deposit via JazzCash (03080780593) to respond to customer part requests.', 'system', 0)`,
         [userId]
       );
     } catch (notifErr) {
