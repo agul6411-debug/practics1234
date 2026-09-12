@@ -15,10 +15,34 @@ const PORT = process.env.PORT || 3005;
 fs.mkdirSync(path.join(__dirname, 'uploads/parts'), { recursive: true });
 fs.mkdirSync(path.join(__dirname, 'uploads/commissions'), { recursive: true });
 
-app.use(cors());
+// Bulletproof CORS Configuration
+const corsOptions = {
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization'],
+  exposedHeaders: ['Content-Length', 'Content-Type'],
+  credentials: false
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
+
+// Explicit fallback CORS middleware for all incoming requests and preflights
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  next();
+});
+
 app.use(express.json());
+
 // Helper for serving uploads with fallback between commissions and parts
 function handleUploadStatic(req, res, next) {
+  res.header('Access-Control-Allow-Origin', '*');
   const { folder, filename } = req.params;
   const targetPath = path.join(__dirname, 'uploads', folder, filename);
   if (fs.existsSync(targetPath)) {
@@ -34,10 +58,16 @@ function handleUploadStatic(req, res, next) {
   next();
 }
 
+const staticOptions = {
+  setHeaders: (res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  }
+};
+
 app.get('/uploads/:folder/:filename', handleUploadStatic);
 app.get('/api/uploads/:folder/:filename', handleUploadStatic);
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-app.use('/api/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads'), staticOptions));
+app.use('/api/uploads', express.static(path.join(__dirname, 'uploads'), staticOptions));
 
 app.get('/', (req, res) => res.json({ message: "Phone Parts Finder API is running" }));
 
