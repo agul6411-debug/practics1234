@@ -1,4 +1,5 @@
-const pool = require('../db');
+﻿const UserModel = require('../models/UserModel');
+const CustomerModel = require('../models/CustomerModel');
 
 /**
  * Gets the profile of the logged-in customer.
@@ -8,16 +9,14 @@ async function getMyProfile(req, res, next) {
     const userId = req.user.id;
 
     // Find user
-    const [userRows] = await pool.execute('SELECT * FROM users WHERE id = ?', [userId]);
-    const user = userRows[0] || null;
+    const user = await UserModel.findById(userId);
     if (!user) {
       res.status(404);
       throw new Error('User account not found');
     }
 
     // Find customer profile
-    const [custRows] = await pool.execute('SELECT * FROM customers WHERE user_id = ?', [userId]);
-    const customerProfile = custRows[0] || null;
+    const customerProfile = await CustomerModel.findByUserId(userId);
     if (!customerProfile) {
       res.status(404);
       throw new Error('Customer profile not found');
@@ -50,8 +49,7 @@ async function updateMyProfile(req, res, next) {
     const userId = req.user.id;
 
     // Find customer profile
-    const [custRows] = await pool.execute('SELECT * FROM customers WHERE user_id = ?', [userId]);
-    const customerProfile = custRows[0] || null;
+    const customerProfile = await CustomerModel.findByUserId(userId);
     if (!customerProfile) {
       res.status(404);
       throw new Error('Customer profile not found');
@@ -63,11 +61,7 @@ async function updateMyProfile(req, res, next) {
       throw new Error('City is required');
     }
 
-    await pool.execute('UPDATE customers SET city = ? WHERE user_id = ?', [city, userId]);
-
-    // Find updated customer profile
-    const [updatedRows] = await pool.execute('SELECT * FROM customers WHERE user_id = ?', [userId]);
-    const updatedProfile = updatedRows[0] || null;
+    const updatedProfile = await CustomerModel.updateCity(userId, city);
 
     res.json({
       success: true,

@@ -51,7 +51,14 @@ const fs = require('fs');
  */
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const dir = path.join(__dirname, 'uploads', 'parts');
+    let subfolder = 'parts';
+    const isCommissionOrProof = file.fieldname === 'receipt' || 
+                                file.fieldname === 'proof' || 
+                                (req.originalUrl && (req.originalUrl.includes('commission') || req.originalUrl.includes('security-deposit')));
+    if (isCommissionOrProof) {
+      subfolder = 'commissions';
+    }
+    const dir = path.join(__dirname, 'uploads', subfolder);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }

@@ -1,4 +1,5 @@
-const pool = require('../db');
+﻿const ChatModel = require('../models/ChatModel');
+const PartModel = require('../models/PartModel');
 
 // Helper to escape HTML characters for basic input sanitization
 function escapeHtml(text) {
@@ -9,18 +10,6 @@ function escapeHtml(text) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
-}
-
-// Helper to resolve user ID to customer/vendor ID
-async function getCustomerOrVendorId(userId, role) {
-  if (role === 'customer') {
-    const [rows] = await pool.execute('SELECT id FROM customers WHERE user_id = ?', [userId]);
-    return rows[0] ? rows[0].id : null;
-  } else if (role === 'vendor') {
-    const [rows] = await pool.execute('SELECT id FROM vendors WHERE user_id = ?', [userId]);
-    return rows[0] ? rows[0].id : null;
-  }
-  return null;
 }
 
 /**
@@ -46,7 +35,7 @@ async function createOrGetRoom(req, res, next) {
       });
     }
 
-    const customerId = await getCustomerOrVendorId(userId, role);
+    const customerId = await ChatModel.getCustomerOrVendorId(userId, role);
     if (!customerId) {
       return res.status(404).json({
         success: false,
@@ -55,8 +44,7 @@ async function createOrGetRoom(req, res, next) {
     }
 
     // Find the part and its vendor
-    const [partRows] = await pool.execute('SELECT vendor_id FROM parts WHERE id = ?', [part_id]);
-    const part = partRows[0];
+    const part = await PartModel.findById(part_id);
     if (!part) {
       return res.status(404).json({
         success: false,
@@ -65,52 +53,11 @@ async function createOrGetRoom(req, res, next) {
     }
     const vendorId = part.vendor_id;
 
-    // Helper query to get full room details with vendor/customer & part info
-    const getFullRoomQuery = `
-      SELECT 
-        cr.*,
-        p.model_name,
-        p.image_url,
-        v.shop_name as vendor_shop_name,
-        v.shop_name as other_name,
-        v.city as other_city,
-        b.name as brand_name
-      FROM chat_rooms cr
-      JOIN vendors v ON cr.vendor_id = v.id
-      JOIN parts p ON cr.part_id = p.id
-      LEFT JOIN brands b ON p.brand_id = b.id
-      WHERE cr.customer_id = ? AND cr.vendor_id = ? AND cr.part_id = ?
-    `;
-
     // Check if room already exists
-    const [existingRoomRows] = await pool.execute(getFullRoomQuery, [customerId, vendorId, part_id]);
-    let room = existingRoomRows[0] || null;
+    let room = await ChatModel.findRoom(customerId, vendorId, part_id);
 
     if (!room) {
-      // Create new chat room
-      const [insertResult] = await pool.execute(
-        'INSERT INTO chat_rooms (customer_id, vendor_id, part_id) VALUES (?, ?, ?)',
-        [customerId, vendorId, part_id]
-      );
-      const roomId = insertResult.insertId;
-
-      const [newRoomRows] = await pool.execute(
-        `SELECT 
-          cr.*,
-          p.model_name,
-          p.image_url,
-          v.shop_name as vendor_shop_name,
-          v.shop_name as other_name,
-          v.city as other_city,
-          b.name as brand_name
-        FROM chat_rooms cr
-        JOIN vendors v ON cr.vendor_id = v.id
-        JOIN parts p ON cr.part_id = p.id
-        LEFT JOIN brands b ON p.brand_id = b.id
-        WHERE cr.id = ?`,
-        [roomId]
-      );
-      room = newRoomRows[0];
+      room = await ChatModel.createRoom(customerId, vendorId, part_id);
     }
 
     res.status(201).json({
@@ -131,27 +78,11 @@ async function getMyRooms(req, res, next) {
     const role = req.user.role;
 
     if (role === 'admin') {
-      // Admin sees ALL rooms in the system (ordered by created_at DESC)
-      const [rooms] = await pool.execute(`
-        SELECT 
-          cr.*,
-          p.model_name,
-          p.barcode_number,
-          u_cust.name as customer_name,
-          v.shop_name as vendor_shop_name,
-          b.name as brand_name
-        FROM chat_rooms cr
-        JOIN customers c ON cr.customer_id = c.id
-        JOIN users u_cust ON c.user_id = u_cust.id
-        JOIN vendors v ON cr.vendor_id = v.id
-        JOIN parts p ON cr.part_id = p.id
-        LEFT JOIN brands b ON p.brand_id = b.id
-        ORDER BY cr.created_at DESC
-      `);
+      const rooms = await ChatModel.getAllRoomsAdmin();
       return res.json({ success: true, data: rooms });
     }
 
-    const participantId = await getCustomerOrVendorId(userId, role);
+    const participantId = await ChatModel.getCustomerOrVendorId(userId, role);
     if (!participantId) {
       return res.status(404).json({
         success: false,
@@ -159,43 +90,7 @@ async function getMyRooms(req, res, next) {
       });
     }
 
-    let query = '';
-    if (role === 'customer') {
-      query = `
-        SELECT 
-          cr.*,
-          p.model_name,
-          p.image_url,
-          v.shop_name as other_name,
-          v.city as other_city,
-          b.name as brand_name
-        FROM chat_rooms cr
-        JOIN vendors v ON cr.vendor_id = v.id
-        JOIN parts p ON cr.part_id = p.id
-        LEFT JOIN brands b ON p.brand_id = b.id
-        WHERE cr.customer_id = ?
-        ORDER BY cr.created_at DESC
-      `;
-    } else if (role === 'vendor') {
-      query = `
-        SELECT 
-          cr.*,
-          p.model_name,
-          p.image_url,
-          u.name as other_name,
-          c.city as other_city,
-          b.name as brand_name
-        FROM chat_rooms cr
-        JOIN customers c ON cr.customer_id = c.id
-        JOIN users u ON c.user_id = u.id
-        JOIN parts p ON cr.part_id = p.id
-        LEFT JOIN brands b ON p.brand_id = b.id
-        WHERE cr.vendor_id = ?
-        ORDER BY cr.created_at DESC
-      `;
-    }
-
-    const [rooms] = await pool.execute(query, [participantId]);
+    const rooms = await ChatModel.getRoomsForParticipant(role, participantId);
     res.json({
       success: true,
       data: rooms
@@ -215,8 +110,7 @@ async function getRoomMessages(req, res, next) {
     const roomId = req.params.roomId;
 
     // Retrieve room
-    const [roomRows] = await pool.execute('SELECT * FROM chat_rooms WHERE id = ?', [roomId]);
-    const room = roomRows[0];
+    const room = await ChatModel.findRoomById(roomId);
     if (!room) {
       return res.status(404).json({
         success: false,
@@ -226,7 +120,7 @@ async function getRoomMessages(req, res, next) {
 
     // Verify access permissions (Participants or System Admin only)
     if (role !== 'admin') {
-      const participantId = await getCustomerOrVendorId(userId, role);
+      const participantId = await ChatModel.getCustomerOrVendorId(userId, role);
       const isAllowed = 
         (role === 'customer' && room.customer_id === participantId) ||
         (role === 'vendor' && room.vendor_id === participantId);
@@ -239,17 +133,7 @@ async function getRoomMessages(req, res, next) {
       }
     }
 
-    // Fetch messages
-    const [messages] = await pool.execute(`
-      SELECT 
-        cm.*,
-        u.name as sender_name,
-        u.role as sender_role
-      FROM chat_messages cm
-      JOIN users u ON cm.sender_id = u.id
-      WHERE cm.room_id = ?
-      ORDER BY cm.created_at ASC
-    `, [roomId]);
+    const messages = await ChatModel.getRoomMessages(roomId);
 
     res.json({
       success: true,
@@ -294,8 +178,7 @@ async function sendMessage(req, res, next) {
     }
 
     // Retrieve room
-    const [roomRows] = await pool.execute('SELECT * FROM chat_rooms WHERE id = ?', [roomId]);
-    const room = roomRows[0];
+    const room = await ChatModel.findRoomById(roomId);
     if (!room) {
       return res.status(404).json({
         success: false,
@@ -304,7 +187,7 @@ async function sendMessage(req, res, next) {
     }
 
     // Verify user belongs to this room
-    const participantId = await getCustomerOrVendorId(userId, role);
+    const participantId = await ChatModel.getCustomerOrVendorId(userId, role);
     const isAllowed = 
       (role === 'customer' && room.customer_id === participantId) ||
       (role === 'vendor' && room.vendor_id === participantId);
@@ -316,27 +199,11 @@ async function sendMessage(req, res, next) {
       });
     }
 
-    // Insert message
-    const [insertResult] = await pool.execute(
-      'INSERT INTO chat_messages (room_id, sender_id, message) VALUES (?, ?, ?)',
-      [roomId, userId, cleanMessage]
-    );
-    const messageId = insertResult.insertId;
-
-    // Return the created message details
-    const [newMessageRows] = await pool.execute(`
-      SELECT 
-        cm.*,
-        u.name as sender_name,
-        u.role as sender_role
-      FROM chat_messages cm
-      JOIN users u ON cm.sender_id = u.id
-      WHERE cm.id = ?
-    `, [messageId]);
+    const createdMessage = await ChatModel.createMessage(roomId, userId, cleanMessage);
 
     res.status(201).json({
       success: true,
-      data: newMessageRows[0]
+      data: createdMessage
     });
   } catch (error) {
     next(error);

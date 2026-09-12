@@ -1,4 +1,5 @@
-const pool = require('../db');
+﻿const UserModel = require('../models/UserModel');
+const VendorModel = require('../models/VendorModel');
 
 /**
  * Gets the profile of the logged-in vendor.
@@ -8,16 +9,14 @@ async function getMyProfile(req, res, next) {
     const userId = req.user.id;
     
     // Find user
-    const [userRows] = await pool.execute('SELECT * FROM users WHERE id = ?', [userId]);
-    const user = userRows[0] || null;
+    const user = await UserModel.findById(userId);
     if (!user) {
       res.status(404);
       throw new Error('User account not found');
     }
 
     // Find vendor profile
-    const [vendRows] = await pool.execute('SELECT * FROM vendors WHERE user_id = ?', [userId]);
-    const vendorProfile = vendRows[0] || null;
+    const vendorProfile = await VendorModel.findByUserId(userId);
     if (!vendorProfile) {
       res.status(404);
       throw new Error('Vendor profile not found');
@@ -59,35 +58,20 @@ async function updateMyProfile(req, res, next) {
     const userId = req.user.id;
 
     // Find vendor profile
-    const [vendRows] = await pool.execute('SELECT * FROM vendors WHERE user_id = ?', [userId]);
-    const vendorProfile = vendRows[0] || null;
+    const vendorProfile = await VendorModel.findByUserId(userId);
     if (!vendorProfile) {
       res.status(404);
       throw new Error('Vendor profile not found');
     }
 
     const { shop_name, city, address, latitude, longitude } = req.body;
-
-    const allowedFields = ['shop_name', 'city', 'address', 'latitude', 'longitude'];
-    const updates = [];
-    const values = [];
-    const fields = { shop_name, city, address, latitude, longitude };
-
-    for (const field of allowedFields) {
-      if (fields[field] !== undefined) {
-        updates.push(`${field} = ?`);
-        values.push(fields[field]);
-      }
-    }
-
-    if (updates.length > 0) {
-      values.push(userId);
-      await pool.execute(`UPDATE vendors SET ${updates.join(', ')} WHERE user_id = ?`, values);
-    }
-
-    // Get updated profile
-    const [updatedRows] = await pool.execute('SELECT * FROM vendors WHERE user_id = ?', [userId]);
-    const updatedProfile = updatedRows[0] || null;
+    const updatedProfile = await VendorModel.updateProfile(userId, {
+      shop_name,
+      city,
+      address,
+      latitude,
+      longitude
+    });
 
     res.json({
       success: true,
@@ -120,28 +104,7 @@ async function submitSecurityDepositProof(req, res, next) {
       });
     }
 
-    // Find vendor profile
-    const [vendRows] = await pool.execute('SELECT * FROM vendors WHERE user_id = ?', [userId]);
-    const vendorProfile = vendRows[0] || null;
-
-    if (!vendorProfile) {
-      await pool.execute(
-        `INSERT INTO vendors (user_id, shop_name, city, address, verification_status, security_deposit_proof, security_deposit_status)
-         VALUES (?, 'Vendor Shop', 'City', 'Address', 'approved', ?, 'pending_verification')`,
-        [userId, proofUrl]
-      );
-    } else {
-      await pool.execute(
-        `UPDATE vendors 
-         SET security_deposit_proof = ?, security_deposit_status = 'pending_verification' 
-         WHERE user_id = ?`,
-        [proofUrl, userId]
-      );
-    }
-
-    // Get updated profile
-    const [updatedRows] = await pool.execute('SELECT * FROM vendors WHERE user_id = ?', [userId]);
-    const updatedProfile = updatedRows[0] || null;
+    const updatedProfile = await VendorModel.submitDepositProof(userId, proofUrl);
 
     res.json({
       success: true,

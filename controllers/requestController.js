@@ -1,4 +1,11 @@
-const pool = require('../db');
+﻿const RequestModel = require('../models/RequestModel');
+const PartModel = require('../models/PartModel');
+const VendorModel = require('../models/VendorModel');
+const CustomerModel = require('../models/CustomerModel');
+const CommissionModel = require('../models/CommissionModel');
+const SystemSettingModel = require('../models/SystemSettingModel');
+const NotificationModel = require('../models/NotificationModel');
+const UserModel = require('../models/UserModel');
 
 /**
  * Creates a new request for a part, calculating sequence numbers and lead locking rules.
@@ -8,12 +15,7 @@ async function createRequest(req, res, next) {
     const userId = req.user.id;
 
     // Find customer profile (auto-create fallback if missing)
-    let [custRows] = await pool.execute('SELECT * FROM customers WHERE user_id = ?', [userId]);
-    let customer = custRows[0] || null;
-    if (!customer) {
-      const [insertRes] = await pool.execute('INSERT INTO customers (user_id, city) VALUES (?, ?)', [userId, 'City']);
-      customer = { id: insertRes.insertId, user_id: userId, city: 'City' };
-    }
+    const customer = await CustomerModel.findOrCreate(userId, 'City');
 
     const { part_id, delivery_type, delivery_address, delivery_city, delivery_phone, delivery_notes } = req.body;
     if (!part_id) {
@@ -22,8 +24,7 @@ async function createRequest(req, res, next) {
     }
 
     // Get part by ID
-    const [partRows] = await pool.execute('SELECT * FROM parts WHERE id = ?', [part_id]);
-    const part = partRows[0] || null;
+    const part = await PartModel.findById(part_id);
     if (!part) {
       res.status(404);
       throw new Error('Part not found');
@@ -40,22 +41,12 @@ async function createRequest(req, res, next) {
     // Decrement stock quantity by 1
     const newStock = Math.max(0, part.stock_quantity - 1);
     const newStatus = newStock === 0 ? 'out_of_stock' : part.status;
-    await pool.execute(
-      'UPDATE parts SET stock_quantity = ?, status = ? WHERE id = ?',
-      [newStock, newStatus, part_id]
-    );
+    await PartModel.decrementStock(part_id, newStock, newStatus);
 
     const vendorId = part.vendor_id;
 
     // Check if this customer has previously contacted this vendor
-    const [existingReqRows] = await pool.execute(
-      `SELECT * FROM requests 
-       WHERE customer_id = ? AND vendor_id = ? 
-       ORDER BY is_locked ASC, created_at ASC 
-       LIMIT 1`,
-      [customer.id, vendorId]
-    );
-    const existingReq = existingReqRows[0] || null;
+    const existingReq = await RequestModel.findByCustomerAndVendor(customer.id, vendorId);
 
     let sequenceNumber;
     let isLocked;
@@ -66,11 +57,7 @@ async function createRequest(req, res, next) {
       isLocked = (existingReq.is_locked == 1 || existingReq.is_locked == true);
     } else {
       // First time contacting vendor: calculate nth distinct customer
-      const [countRows] = await pool.execute(
-        'SELECT COUNT(DISTINCT customer_id) as count FROM requests WHERE vendor_id = ?',
-        [vendorId]
-      );
-      const distinctCount = countRows[0].count;
+      const distinctCount = await RequestModel.countDistinctCustomersForVendor(vendorId);
       sequenceNumber = distinctCount + 1;
       isLocked = sequenceNumber > 2; // Lock leads after first 2 free customers
     }
@@ -87,54 +74,59 @@ async function createRequest(req, res, next) {
     const totalAmount = Number((partPrice + deliveryFee).toFixed(2));
 
     // Create request with Home Delivery details and Total Bill
-    const [requestResult] = await pool.execute(
-      `INSERT INTO requests (customer_id, vendor_id, part_id, sequence_number, is_locked, status, delivery_type, delivery_address, delivery_city, delivery_phone, delivery_notes, delivery_fee, total_amount)
-       VALUES (?, ?, ?, ?, ?, 'requested', ?, ?, ?, ?, ?, ?, ?)`,
-      [customer.id, vendorId, part_id, sequenceNumber, isLocked ? 1 : 0, delType, delAddress, delCity, delPhone, delNotes, deliveryFee, totalAmount]
-    );
-    const requestId = requestResult.insertId;
+    const newRequest = await RequestModel.create({
+      customerId: customer.id,
+      vendorId,
+      partId: part_id,
+      sequenceNumber,
+      isLocked,
+      deliveryType: delType,
+      deliveryAddress: delAddress,
+      deliveryCity: delCity,
+      deliveryPhone: delPhone,
+      deliveryNotes: delNotes,
+      deliveryFee,
+      totalAmount
+    });
 
     // If this is a brand new unique customer and sequence_number > 2 (locked), automatically create commission record
     if (!existingReq && isLocked) {
       let ratePercent = 10;
       try {
-        const [rateRows] = await pool.execute("SELECT setting_value FROM system_settings WHERE setting_key = 'commission_rate_percent'");
-        if (rateRows.length > 0 && !isNaN(rateRows[0].setting_value)) {
-          ratePercent = parseFloat(rateRows[0].setting_value);
+        const val = await SystemSettingModel.getSettingValue('commission_rate_percent');
+        if (val && !isNaN(val)) {
+          ratePercent = parseFloat(val);
         }
       } catch (err) {
         console.warn('System settings fetch error, using default 10% rate:', err.message);
       }
 
       const amount = Number((part.price * (ratePercent / 100)).toFixed(2));
-      await pool.execute(
-        `INSERT INTO commissions (request_id, vendor_id, amount, status)
-         VALUES (?, ?, ?, 'pending')`,
-         [requestId, vendorId, amount]
-      );
+      await CommissionModel.create({
+        requestId: newRequest.id,
+        vendorId,
+        amount,
+        status: 'pending'
+      });
     }
 
     // Trigger notification to vendor user (wrapped in try/catch)
     try {
-      const [vendRows] = await pool.execute('SELECT * FROM vendors WHERE id = ?', [vendorId]);
-      const vendorRecord = vendRows[0] || null;
+      const vendorRecord = await VendorModel.findById(vendorId);
       if (vendorRecord) {
         const notifMsg = isLocked
           ? `New ${delType === 'home_delivery' ? 'Home Delivery' : 'Pickup'} request received — pay pending commission to view details`
           : `New ${delType === 'home_delivery' ? 'Home Delivery' : 'Pickup'} request for ${part.model_name}`;
-        await pool.execute(
-          `INSERT INTO notifications (user_id, message, type, is_read)
-           VALUES (?, ?, 'request', 0)`,
-          [vendorRecord.user_id, notifMsg]
-        );
+        await NotificationModel.create({
+          userId: vendorRecord.user_id,
+          message: notifMsg,
+          type: 'request',
+          isRead: 0
+        });
       }
     } catch (notifErr) {
       console.error('Notification creation failed in createRequest:', notifErr.message);
     }
-
-    // Get created request
-    const [newRequestRows] = await pool.execute('SELECT * FROM requests WHERE id = ?', [requestId]);
-    const newRequest = newRequestRows[0] || null;
 
     res.status(201).json({
       success: true,
@@ -154,32 +146,13 @@ async function getMyRequests(req, res, next) {
     const userId = req.user.id;
 
     // Find customer profile
-    const [custRows] = await pool.execute('SELECT * FROM customers WHERE user_id = ?', [userId]);
-    const customer = custRows[0] || null;
+    const customer = await CustomerModel.findByUserId(userId);
     if (!customer) {
       res.status(404);
       throw new Error('Customer profile not found');
     }
 
-    // Get requests by customer
-    const [requests] = await pool.execute(
-      `SELECT 
-        r.id, r.sequence_number, r.is_locked, r.status, r.created_at,
-        r.delivery_type, r.delivery_address, r.delivery_city, r.delivery_phone, r.delivery_notes,
-        r.delivery_fee, r.total_amount,
-        r.cancellation_reason, r.cancelled_by, r.cancelled_at,
-        p.id as part_id, p.model_name, p.price, p.image_url,
-        v.id as vendor_id, v.user_id as vendor_user_id, v.shop_name, v.city as vendor_city, v.address as vendor_address,
-        b.name as brand_name, pt.name as part_type_name
-      FROM requests r
-      JOIN parts p ON r.part_id = p.id
-      JOIN vendors v ON r.vendor_id = v.id
-      LEFT JOIN brands b ON p.brand_id = b.id
-      LEFT JOIN part_types pt ON p.part_type_id = pt.id
-      WHERE r.customer_id = ?
-      ORDER BY r.created_at DESC`,
-      [customer.id]
-    );
+    const requests = await RequestModel.getByCustomerId(customer.id);
 
     res.json({
       success: true,
@@ -198,31 +171,13 @@ async function getVendorRequests(req, res, next) {
     const userId = req.user.id;
 
     // Find vendor profile
-    const [vendRows] = await pool.execute('SELECT * FROM vendors WHERE user_id = ?', [userId]);
-    const vendor = vendRows[0] || null;
+    const vendor = await VendorModel.findByUserId(userId);
     if (!vendor) {
       res.status(404);
       throw new Error('Vendor profile not found');
     }
 
-    // Get vendor requests
-    const [rawRequests] = await pool.execute(
-      `SELECT 
-        r.id, r.customer_id, r.vendor_id, r.part_id, r.sequence_number, r.is_locked, r.status, r.created_at,
-        r.delivery_type, r.delivery_address, r.delivery_city, r.delivery_phone, r.delivery_notes,
-        r.delivery_fee, r.total_amount,
-        r.cancellation_reason, r.cancelled_by, r.cancelled_at,
-        p.model_name, p.price, p.condition_type, p.image_url,
-        u.id as customer_user_id, u.name as customer_name, u.phone as customer_phone, u.email as customer_email,
-        c.city as customer_city
-      FROM requests r
-      JOIN parts p ON r.part_id = p.id
-      JOIN customers c ON r.customer_id = c.id
-      JOIN users u ON c.user_id = u.id
-      WHERE r.vendor_id = ?
-      ORDER BY r.created_at DESC, r.id DESC`,
-      [vendor.id]
-    );
+    const rawRequests = await RequestModel.getByVendorId(vendor.id);
 
     const formattedRequests = rawRequests.map((reqItem) => {
       const isLocked = reqItem.is_locked == 1 || reqItem.is_locked == true;
@@ -298,8 +253,7 @@ async function respondToRequest(req, res, next) {
     const userId = req.user.id;
 
     // Find vendor profile
-    const [vendRows] = await pool.execute('SELECT * FROM vendors WHERE user_id = ?', [userId]);
-    const vendor = vendRows[0] || null;
+    const vendor = await VendorModel.findByUserId(userId);
     if (!vendor) {
       res.status(404);
       throw new Error('Vendor profile not found');
@@ -314,8 +268,7 @@ async function respondToRequest(req, res, next) {
     }
 
     // Find request by ID
-    const [requestRows] = await pool.execute('SELECT * FROM requests WHERE id = ?', [requestId]);
-    const request = requestRows[0] || null;
+    const request = await RequestModel.findById(requestId);
     if (!request) {
       res.status(404);
       throw new Error('Request not found');
@@ -347,23 +300,21 @@ async function respondToRequest(req, res, next) {
     }
 
     // Update request status
-    await pool.execute('UPDATE requests SET status = ? WHERE id = ?', [status, requestId]);
+    await RequestModel.updateStatus(requestId, status);
 
     // Trigger notification to customer user (wrapped in try/catch)
     try {
-      const [custRows] = await pool.execute('SELECT * FROM customers WHERE id = ?', [request.customer_id]);
-      const customerRecord = custRows[0] || null;
-
-      const [partRows] = await pool.execute('SELECT * FROM parts WHERE id = ?', [request.part_id]);
-      const part = partRows[0] || null;
+      const customerRecord = await CustomerModel.findById(request.customer_id);
+      const part = await PartModel.findById(request.part_id);
 
       if (customerRecord && part) {
         const statusDisplay = status === 'available' ? 'Available' : 'Not Available';
-        await pool.execute(
-          `INSERT INTO notifications (user_id, message, type, is_read)
-           VALUES (?, ?, 'response', 0)`,
-          [customerRecord.user_id, `Vendor responded to your request for ${part.model_name}: ${statusDisplay}`]
-        );
+        await NotificationModel.create({
+          userId: customerRecord.user_id,
+          message: `Vendor responded to your request for ${part.model_name}: ${statusDisplay}`,
+          type: 'response',
+          isRead: 0
+        });
       }
     } catch (notifErr) {
       console.error('Notification creation failed in respondToRequest:', notifErr.message);
@@ -407,40 +358,24 @@ async function verifyDelivery(req, res, next) {
     let expectedBarcode = '';
 
     if (request_id) {
-      const [reqRows] = await pool.execute(
-        `SELECT r.*, p.barcode_number, p.id as p_id 
-         FROM requests r 
-         JOIN parts p ON r.part_id = p.id 
-         WHERE r.id = ?`,
-        [request_id]
-      );
-      if (reqRows.length > 0) {
-        partId = reqRows[0].p_id;
-        expectedBarcode = (reqRows[0].barcode_number || '').trim();
+      const reqWithPart = await RequestModel.findWithPartAndBarcode(request_id);
+      if (reqWithPart) {
+        partId = reqWithPart.p_id;
+        expectedBarcode = (reqWithPart.barcode_number || '').trim();
       }
     }
 
     if (partId && !expectedBarcode) {
-      const [partRows] = await pool.execute('SELECT barcode_number FROM parts WHERE id = ?', [partId]);
-      if (partRows.length > 0) {
-        expectedBarcode = (partRows[0].barcode_number || '').trim();
+      const part = await PartModel.findById(partId);
+      if (part) {
+        expectedBarcode = (part.barcode_number || '').trim();
       }
     }
 
     // SECURITY CHECK 1: Product Already Sold / Previously Verified Check across ALL orders
-    const reqFilter = request_id ? 'AND r.id != ?' : '';
-    const reqParams = request_id ? [cleanScanned, request_id] : [cleanScanned];
+    const prevOrder = await RequestModel.findByVerifiedBarcode(cleanScanned, request_id);
 
-    const [prevReuseRows] = await pool.execute(
-      `SELECT r.id, r.created_at, r.verified_at, p.model_name
-       FROM requests r
-       JOIN parts p ON r.part_id = p.id
-       WHERE LOWER(TRIM(r.verified_barcode)) = LOWER(TRIM(?)) ${reqFilter}`,
-      reqParams
-    );
-
-    if (prevReuseRows.length > 0) {
-      const prevOrder = prevReuseRows[0];
+    if (prevOrder) {
       return res.status(200).json({
         success: false,
         is_match: false,
@@ -453,19 +388,9 @@ async function verifyDelivery(req, res, next) {
     }
 
     // SECURITY CHECK 2: Copied Code Check across OTHER registered parts in system
-    const partFilter = partId ? 'AND p.id != ?' : '';
-    const partParams = partId ? [cleanScanned, partId] : [cleanScanned];
+    const otherPart = await PartModel.findOtherPartByBarcode(cleanScanned, partId);
 
-    const [otherPartRows] = await pool.execute(
-      `SELECT p.id, p.model_name, v.shop_name
-       FROM parts p
-       JOIN vendors v ON p.vendor_id = v.id
-       WHERE LOWER(TRIM(p.barcode_number)) = LOWER(TRIM(?)) ${partFilter}`,
-      partParams
-    );
-
-    if (otherPartRows.length > 0) {
-      const otherPart = otherPartRows[0];
+    if (otherPart) {
       return res.status(200).json({
         success: false,
         is_match: false,
@@ -491,17 +416,11 @@ async function verifyDelivery(req, res, next) {
 
     // UPDATE REQUEST AS VERIFIED & EXPIRE QR CODE (If request_id present)
     if (request_id) {
-      await pool.execute(
-        `UPDATE requests SET verified_barcode = ?, verified_at = NOW(), status = 'available' WHERE id = ?`,
-        [cleanScanned, request_id]
-      );
+      await RequestModel.verifyDelivery(request_id, cleanScanned);
 
       // Expire QR code / barcode token and set part to sold out
       if (partId) {
-        await pool.execute(
-          `UPDATE parts SET status = 'out_of_stock', stock_quantity = 0 WHERE id = ?`,
-          [partId]
-        );
+        await PartModel.markOutOfStock(partId);
       }
     }
 
@@ -525,8 +444,7 @@ async function cancelRequestByVendor(req, res, next) {
     const userId = req.user.id;
 
     // Find vendor profile
-    const [vendRows] = await pool.execute('SELECT * FROM vendors WHERE user_id = ?', [userId]);
-    const vendor = vendRows[0] || null;
+    const vendor = await VendorModel.findByUserId(userId);
     if (!vendor) {
       res.status(404);
       throw new Error('Vendor profile not found');
@@ -537,8 +455,7 @@ async function cancelRequestByVendor(req, res, next) {
     const cancelReason = reason && reason.trim() !== '' ? reason.trim() : 'Vendor cancelled order online';
 
     // Find request by ID
-    const [requestRows] = await pool.execute('SELECT * FROM requests WHERE id = ?', [requestId]);
-    const request = requestRows[0] || null;
+    const request = await RequestModel.findById(requestId);
     if (!request) {
       res.status(404);
       throw new Error('Request not found');
@@ -560,34 +477,20 @@ async function cancelRequestByVendor(req, res, next) {
     }
 
     // 1. Update Request status to cancelled
-    await pool.execute(
-      `UPDATE requests 
-       SET status = 'cancelled', cancellation_reason = ?, cancelled_by = 'vendor', cancelled_at = NOW() 
-       WHERE id = ?`,
-      [cancelReason, requestId]
-    );
+    await RequestModel.cancelByVendor(requestId, cancelReason);
 
     // 2. Restore Part Stock Quantity
-    await pool.execute(
-      `UPDATE parts 
-       SET stock_quantity = stock_quantity + 1, status = IF(status = 'out_of_stock', 'available', status) 
-       WHERE id = ?`,
-      [request.part_id]
-    );
+    await PartModel.restoreStock(request.part_id);
 
     // 3. Increment Vendor Cancellation Counter
-    await pool.execute('UPDATE vendors SET cancellation_count = cancellation_count + 1 WHERE id = ?', [vendor.id]);
-
-    // Fetch updated vendor record & cancellation limit
-    const [updatedVendRows] = await pool.execute('SELECT * FROM vendors WHERE id = ?', [vendor.id]);
-    const updatedVendor = updatedVendRows[0] || vendor;
+    const updatedVendor = await VendorModel.incrementCancellationCount(vendor.id);
     const newCancelCount = updatedVendor.cancellation_count || 1;
 
     let maxLimit = 3;
     try {
-      const [limitRows] = await pool.execute("SELECT setting_value FROM system_settings WHERE setting_key = 'max_vendor_cancellations'");
-      if (limitRows.length > 0 && !isNaN(limitRows[0].setting_value)) {
-        maxLimit = parseInt(limitRows[0].setting_value, 10);
+      const val = await SystemSettingModel.getSettingValue('max_vendor_cancellations');
+      if (val && !isNaN(val)) {
+        maxLimit = parseInt(val, 10);
       }
     } catch (_) {}
 
@@ -595,17 +498,15 @@ async function cancelRequestByVendor(req, res, next) {
 
     // 4. Auto-block Vendor if cancellation count reaches limit (3 or 4)
     if (isAutoBlocked) {
-      await pool.execute("UPDATE users SET status = 'blocked' WHERE id = ?", [vendor.user_id]);
+      await UserModel.updateStatus(vendor.user_id, 'blocked');
 
       try {
-        await pool.execute(
-          `INSERT INTO notifications (user_id, message, type, is_read)
-           VALUES (?, ?, 'system', 0)`,
-          [
-            vendor.user_id,
-            `🚨 ACCOUNT AUTOMATICALLY BLOCKED: Your vendor account has been blocked because you cancelled ${newCancelCount} orders (Cancellation Limit: ${maxLimit}). Reason: Exceeded online order cancellation limit.`
-          ]
-        );
+        await NotificationModel.create({
+          userId: vendor.user_id,
+          message: `🚨 ACCOUNT AUTOMATICALLY BLOCKED: Your vendor account has been blocked because you cancelled ${newCancelCount} orders (Cancellation Limit: ${maxLimit}). Reason: Exceeded online order cancellation limit.`,
+          type: 'system',
+          isRead: 0
+        });
       } catch (notifErr) {
         console.error('Failed to notify vendor of auto-block:', notifErr.message);
       }
@@ -613,20 +514,17 @@ async function cancelRequestByVendor(req, res, next) {
 
     // 5. Notify Customer about cancellation
     try {
-      const [custRows] = await pool.execute('SELECT * FROM customers WHERE id = ?', [request.customer_id]);
-      const customerRecord = custRows[0] || null;
-      const [partRows] = await pool.execute('SELECT model_name FROM parts WHERE id = ?', [request.part_id]);
-      const partModelName = partRows[0] ? partRows[0].model_name : 'product';
+      const customerRecord = await CustomerModel.findById(request.customer_id);
+      const part = await PartModel.findById(request.part_id);
+      const partModelName = part ? part.model_name : 'product';
 
       if (customerRecord) {
-        await pool.execute(
-          `INSERT INTO notifications (user_id, message, type, is_read)
-           VALUES (?, ?, 'response', 0)`,
-          [
-            customerRecord.user_id,
-            `Your order #${requestId} for ${partModelName} was cancelled by the vendor. Reason: ${cancelReason}`
-          ]
-        );
+        await NotificationModel.create({
+          userId: customerRecord.user_id,
+          message: `Your order #${requestId} for ${partModelName} was cancelled by the vendor. Reason: ${cancelReason}`,
+          type: 'response',
+          isRead: 0
+        });
       }
     } catch (notifErr) {
       console.error('Customer notification failed on cancellation:', notifErr.message);
@@ -634,20 +532,21 @@ async function cancelRequestByVendor(req, res, next) {
 
     // 6. Notify All Admins about Vendor Cancellation & Auto-Block Status
     try {
-      const [adminRows] = await pool.execute("SELECT id FROM users WHERE role = 'admin'");
-      const [partRows] = await pool.execute('SELECT model_name FROM parts WHERE id = ?', [request.part_id]);
-      const partModelName = partRows[0] ? partRows[0].model_name : 'product';
+      const adminUsers = await UserModel.getAdminUsers();
+      const part = await PartModel.findById(request.part_id);
+      const partModelName = part ? part.model_name : 'product';
 
       const adminMsg = isAutoBlocked
         ? `🚨 VENDOR AUTO-BLOCKED: Vendor '${updatedVendor.shop_name}' (ID: ${vendor.id}) cancelled Order #${requestId} (${partModelName}) and was AUTOMATICALLY BLOCKED after reaching ${newCancelCount}/${maxLimit} order cancellations!`
         : `⚠️ ORDER CANCELLED BY VENDOR: Vendor '${updatedVendor.shop_name}' cancelled Order #${requestId} (${partModelName}). Reason: ${cancelReason}. Vendor total cancellations: ${newCancelCount}/${maxLimit}.`;
 
-      for (const adminUser of adminRows) {
-        await pool.execute(
-          `INSERT INTO notifications (user_id, message, type, is_read)
-           VALUES (?, ?, 'system', 0)`,
-          [adminUser.id, adminMsg]
-        );
+      for (const adminUser of adminUsers) {
+        await NotificationModel.create({
+          userId: adminUser.id,
+          message: adminMsg,
+          type: 'system',
+          isRead: 0
+        });
       }
     } catch (adminNotifErr) {
       console.error('Admin notification failed on cancellation:', adminNotifErr.message);

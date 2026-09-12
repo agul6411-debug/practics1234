@@ -1,4 +1,9 @@
-const pool = require('../db');
+﻿const VendorModel = require('../models/VendorModel');
+const UserModel = require('../models/UserModel');
+const PartModel = require('../models/PartModel');
+const RequestModel = require('../models/RequestModel');
+const SystemSettingModel = require('../models/SystemSettingModel');
+const NotificationModel = require('../models/NotificationModel');
 
 /**
  * Retrieves all vendors, optionally filtered by status ('pending', 'approved', 'rejected').
@@ -6,26 +11,7 @@ const pool = require('../db');
 async function getAllVendors(req, res, next) {
   try {
     const { status } = req.query;
-
-    let query = `
-      SELECT 
-        v.id as vendor_id, v.user_id, v.shop_name, v.verification_docs, v.shop_photo_url, v.cnic_photo_url, v.city, v.address,
-        v.latitude, v.longitude, v.verification_status, v.security_deposit_status,
-        v.security_deposit_proof, v.security_deposit_amount, v.cancellation_count, v.created_at as vendor_created_at,
-        u.name as owner_name, u.email as owner_email, u.phone as owner_phone, u.status as account_status
-      FROM vendors v
-      JOIN users u ON v.user_id = u.id
-    `;
-    const values = [];
-
-    if (status) {
-      query += ' WHERE v.verification_status = ?';
-      values.push(status);
-    }
-
-    query += ' ORDER BY v.created_at DESC';
-
-    const [vendors] = await pool.execute(query, values);
+    const vendors = await VendorModel.getAll({ status });
 
     res.json({
       success: true,
@@ -44,22 +30,18 @@ async function approveVendor(req, res, next) {
   try {
     const vendorId = req.params.id;
 
-    // Update status - approve vendor shop (security deposit remains separate and must be paid/verified)
-    await pool.execute(
-      "UPDATE vendors SET verification_status = 'approved' WHERE id = ?",
-      [vendorId]
-    );
+    await VendorModel.updateVerificationStatus(vendorId, 'approved');
 
     // Trigger notification to vendor user (wrapped in try/catch)
     try {
-      const [vendRows] = await pool.execute('SELECT * FROM vendors WHERE id = ?', [vendorId]);
-      const vendorRecord = vendRows[0] || null;
+      const vendorRecord = await VendorModel.findById(vendorId);
       if (vendorRecord) {
-        await pool.execute(
-          `INSERT INTO notifications (user_id, message, type, is_read)
-           VALUES (?, 'Your shop has been approved. You can now list parts.', 'system', 0)`,
-          [vendorRecord.user_id]
-        );
+        await NotificationModel.create({
+          userId: vendorRecord.user_id,
+          message: 'Your shop has been approved. You can now list parts.',
+          type: 'system',
+          isRead: 0
+        });
       }
     } catch (notifErr) {
       console.error('Notification creation failed in approveVendor:', notifErr.message);
@@ -81,19 +63,18 @@ async function rejectVendor(req, res, next) {
   try {
     const vendorId = req.params.id;
 
-    // Update status
-    await pool.execute('UPDATE vendors SET verification_status = ? WHERE id = ?', ['rejected', vendorId]);
+    await VendorModel.updateVerificationStatus(vendorId, 'rejected');
 
     // Trigger notification to vendor user (wrapped in try/catch)
     try {
-      const [vendRows] = await pool.execute('SELECT * FROM vendors WHERE id = ?', [vendorId]);
-      const vendorRecord = vendRows[0] || null;
+      const vendorRecord = await VendorModel.findById(vendorId);
       if (vendorRecord) {
-        await pool.execute(
-          `INSERT INTO notifications (user_id, message, type, is_read)
-           VALUES (?, 'Your shop registration was rejected.', 'system', 0)`,
-          [vendorRecord.user_id]
-        );
+        await NotificationModel.create({
+          userId: vendorRecord.user_id,
+          message: 'Your shop registration was rejected.',
+          type: 'system',
+          isRead: 0
+        });
       }
     } catch (notifErr) {
       console.error('Notification creation failed in rejectVendor:', notifErr.message);
@@ -114,18 +95,7 @@ async function rejectVendor(req, res, next) {
 async function getAllUsers(req, res, next) {
   try {
     const { role } = req.query;
-
-    let query = 'SELECT id, name, email, phone, role, status, created_at FROM users';
-    const values = [];
-
-    if (role) {
-      query += ' WHERE role = ?';
-      values.push(role);
-    }
-
-    query += ' ORDER BY created_at DESC';
-
-    const [users] = await pool.execute(query, values);
+    const users = await UserModel.getAll({ role });
 
     res.json({
       success: true,
@@ -143,7 +113,7 @@ async function getAllUsers(req, res, next) {
 async function blockUser(req, res, next) {
   try {
     const userId = req.params.id;
-    await pool.execute('UPDATE users SET status = ? WHERE id = ?', ['blocked', userId]);
+    await UserModel.updateStatus(userId, 'blocked');
     res.json({
       success: true,
       message: 'User blocked successfully'
@@ -159,7 +129,7 @@ async function blockUser(req, res, next) {
 async function unblockUser(req, res, next) {
   try {
     const userId = req.params.id;
-    await pool.execute('UPDATE users SET status = ? WHERE id = ?', ['active', userId]);
+    await UserModel.updateStatus(userId, 'active');
     res.json({
       success: true,
       message: 'User unblocked successfully'
@@ -174,28 +144,23 @@ async function unblockUser(req, res, next) {
  */
 async function getDashboardStats(req, res, next) {
   try {
-    const [
-      [vendorsCountRows],
-      [customersCountRows],
-      [partsCountRows],
-      [requestsCountRows],
-      [pendingCountRows]
-    ] = await Promise.all([
-      pool.execute('SELECT COUNT(*) as count FROM vendors'),
-      pool.execute('SELECT COUNT(*) as count FROM customers'),
-      pool.execute('SELECT COUNT(*) as count FROM parts'),
-      pool.execute('SELECT COUNT(*) as count FROM requests'),
-      pool.execute("SELECT COUNT(*) as count FROM vendors WHERE verification_status = 'pending'")
-    ]);
+    const [totalVendors, totalCustomers, totalParts, totalRequests, pendingVendorApprovals] =
+      await Promise.all([
+        VendorModel.countAll(),
+        UserModel.countAll ? (await UserModel.getAll({ role: 'customer' })).length : 0,
+        PartModel.countAll(),
+        RequestModel.countAll(),
+        VendorModel.countPending()
+      ]);
 
     res.json({
       success: true,
       data: {
-        totalVendors: vendorsCountRows[0].count,
-        totalCustomers: customersCountRows[0].count,
-        totalParts: partsCountRows[0].count,
-        totalRequests: requestsCountRows[0].count,
-        pendingVendorApprovals: pendingCountRows[0].count
+        totalVendors,
+        totalCustomers,
+        totalParts,
+        totalRequests,
+        pendingVendorApprovals
       }
     });
   } catch (error) {
@@ -208,14 +173,7 @@ async function getDashboardStats(req, res, next) {
  */
 async function getPublicSettings(req, res, next) {
   try {
-    const [rows] = await pool.execute('SELECT * FROM system_settings');
-    const settingsMap = {
-      security_deposit_amount: '500',
-      security_deposit_phone: '03080780593',
-      commission_rate_percent: '10'
-    };
-    rows.forEach(r => settingsMap[r.setting_key] = r.setting_value);
-
+    const settingsMap = await SystemSettingModel.getPublicSettings();
     res.json({
       success: true,
       data: settingsMap
@@ -231,34 +189,11 @@ async function getPublicSettings(req, res, next) {
 async function updateSystemSettings(req, res, next) {
   try {
     const { security_deposit_amount, security_deposit_phone, commission_rate_percent } = req.body;
-
-    if (security_deposit_amount !== undefined) {
-      await pool.execute(
-        `INSERT INTO system_settings (setting_key, setting_value) VALUES ('security_deposit_amount', ?)
-         ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)`,
-        [String(security_deposit_amount)]
-      );
-    }
-
-    if (security_deposit_phone !== undefined) {
-      await pool.execute(
-        `INSERT INTO system_settings (setting_key, setting_value) VALUES ('security_deposit_phone', ?)
-         ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)`,
-        [String(security_deposit_phone)]
-      );
-    }
-
-    if (commission_rate_percent !== undefined) {
-      await pool.execute(
-        `INSERT INTO system_settings (setting_key, setting_value) VALUES ('commission_rate_percent', ?)
-         ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)`,
-        [String(commission_rate_percent)]
-      );
-    }
-
-    const [rows] = await pool.execute('SELECT * FROM system_settings');
-    const settingsMap = {};
-    rows.forEach(r => settingsMap[r.setting_key] = r.setting_value);
+    const settingsMap = await SystemSettingModel.updateMultipleSettings({
+      security_deposit_amount,
+      security_deposit_phone,
+      commission_rate_percent
+    });
 
     res.json({
       success: true,
@@ -276,9 +211,7 @@ async function updateSystemSettings(req, res, next) {
 async function verifyVendorDeposit(req, res, next) {
   try {
     const vendorId = req.params.id;
-
-    const [vendRows] = await pool.execute('SELECT * FROM vendors WHERE id = ?', [vendorId]);
-    const vendorRecord = vendRows[0] || null;
+    const vendorRecord = await VendorModel.findById(vendorId);
     if (!vendorRecord) {
       res.status(404);
       throw new Error('Vendor profile not found');
@@ -291,20 +224,18 @@ async function verifyVendorDeposit(req, res, next) {
       });
     }
 
-    await pool.execute('UPDATE vendors SET security_deposit_status = ? WHERE id = ?', ['paid', vendorId]);
+    await VendorModel.updateDepositStatus(vendorId, 'paid');
 
     try {
       // Mark older deposit notifications as read to prevent spam
-      await pool.execute(
-        "UPDATE notifications SET is_read = 1 WHERE user_id = ? AND message LIKE '%Security Deposit%'",
-        [vendorRecord.user_id]
-      );
+      await NotificationModel.markReadByMessagePattern(vendorRecord.user_id, '%Security Deposit%');
 
-      await pool.execute(
-        `INSERT INTO notifications (user_id, message, type, is_read)
-         VALUES (?, 'Your Security Deposit has been verified & approved! You can now respond to customer leads.', 'system', 0)`,
-        [vendorRecord.user_id]
-      );
+      await NotificationModel.create({
+        userId: vendorRecord.user_id,
+        message: 'Your Security Deposit has been verified & approved! You can now respond to customer leads.',
+        type: 'system',
+        isRead: 0
+      });
     } catch (notifErr) {
       console.error('Notification creation failed in verifyVendorDeposit:', notifErr.message);
     }
@@ -324,18 +255,17 @@ async function verifyVendorDeposit(req, res, next) {
 async function rejectVendorDeposit(req, res, next) {
   try {
     const vendorId = req.params.id;
-
-    await pool.execute('UPDATE vendors SET security_deposit_status = ? WHERE id = ?', ['rejected', vendorId]);
+    await VendorModel.updateDepositStatus(vendorId, 'rejected');
 
     try {
-      const [vendRows] = await pool.execute('SELECT * FROM vendors WHERE id = ?', [vendorId]);
-      const vendorRecord = vendRows[0] || null;
+      const vendorRecord = await VendorModel.findById(vendorId);
       if (vendorRecord) {
-        await pool.execute(
-          `INSERT INTO notifications (user_id, message, type, is_read)
-           VALUES (?, 'Your Security Deposit receipt photo was rejected. Please upload a valid JazzCash receipt photo.', 'system', 0)`,
-          [vendorRecord.user_id]
-        );
+        await NotificationModel.create({
+          userId: vendorRecord.user_id,
+          message: 'Your Security Deposit receipt photo was rejected. Please upload a valid JazzCash receipt photo.',
+          type: 'system',
+          isRead: 0
+        });
       }
     } catch (notifErr) {
       console.error('Notification creation failed in rejectVendorDeposit:', notifErr.message);
@@ -355,15 +285,7 @@ async function rejectVendorDeposit(req, res, next) {
  */
 async function getAllNotificationsAdmin(req, res, next) {
   try {
-    const [rows] = await pool.execute(`
-      SELECT 
-        n.id, n.user_id, n.message, n.type, n.is_read, n.created_at,
-        u.name as user_name, u.email as user_email, u.role as user_role
-      FROM notifications n
-      JOIN users u ON n.user_id = u.id
-      ORDER BY n.created_at DESC, n.id DESC
-    `);
-
+    const rows = await NotificationModel.getAllAdmin();
     res.json({
       success: true,
       count: rows.length,
@@ -390,27 +312,11 @@ async function broadcastNotificationAdmin(req, res, next) {
     const cleanMsg = message.trim();
 
     if (target_user_id) {
-      await pool.execute(
-        'INSERT INTO notifications (user_id, message, type, is_read) VALUES (?, ?, ?, 0)',
-        [target_user_id, cleanMsg, notifType]
-      );
+      await NotificationModel.broadcastToUser(target_user_id, cleanMsg, notifType);
     } else if (target_role === 'vendor' || target_role === 'customer') {
-      const [users] = await pool.execute('SELECT id FROM users WHERE role = ?', [target_role]);
-      for (const u of users) {
-        await pool.execute(
-          'INSERT INTO notifications (user_id, message, type, is_read) VALUES (?, ?, ?, 0)',
-          [u.id, cleanMsg, notifType]
-        );
-      }
+      await NotificationModel.broadcastToRole(target_role, cleanMsg, notifType);
     } else {
-      // Broadcast to ALL users
-      const [users] = await pool.execute('SELECT id FROM users');
-      for (const u of users) {
-        await pool.execute(
-          'INSERT INTO notifications (user_id, message, type, is_read) VALUES (?, ?, ?, 0)',
-          [u.id, cleanMsg, notifType]
-        );
-      }
+      await NotificationModel.broadcastToAll(cleanMsg, notifType);
     }
 
     res.json({

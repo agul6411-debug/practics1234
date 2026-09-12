@@ -1,4 +1,4 @@
-const pool = require('../db');
+﻿const NotificationModel = require('../models/NotificationModel');
 
 /**
  * Retrieves all notifications for the authenticated user.
@@ -6,20 +6,7 @@ const pool = require('../db');
 async function getMyNotifications(req, res, next) {
   try {
     const userId = req.user.id;
-
-    // Get notifications
-    const [rows] = await pool.execute(
-      `SELECT id, user_id, message, type, is_read, created_at
-       FROM notifications
-       WHERE user_id = ?
-       ORDER BY created_at DESC, id DESC`,
-      [userId]
-    );
-
-    const notifications = rows.map((row) => ({
-      ...row,
-      is_read: Boolean(row.is_read)
-    }));
+    const notifications = await NotificationModel.getByUser(userId);
 
     res.json({
       success: true,
@@ -37,13 +24,7 @@ async function getMyNotifications(req, res, next) {
 async function getUnreadCount(req, res, next) {
   try {
     const userId = req.user.id;
-
-    // Get unread count
-    const [rows] = await pool.execute(
-      'SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0',
-      [userId]
-    );
-    const count = rows[0].count;
+    const count = await NotificationModel.getUnreadCount(userId);
 
     res.json({
       success: true,
@@ -62,9 +43,7 @@ async function markAsRead(req, res, next) {
     const userId = req.user.id;
     const notificationId = req.params.id;
 
-    // Find notification by ID
-    const [rows] = await pool.execute('SELECT * FROM notifications WHERE id = ?', [notificationId]);
-    const notification = rows[0] || null;
+    const notification = await NotificationModel.findById(notificationId);
     if (!notification) {
       res.status(404);
       throw new Error('Notification not found');
@@ -78,8 +57,7 @@ async function markAsRead(req, res, next) {
       });
     }
 
-    // Mark as read
-    await pool.execute('UPDATE notifications SET is_read = 1 WHERE id = ?', [notificationId]);
+    await NotificationModel.markAsRead(notificationId);
 
     res.json({
       success: true,
@@ -96,9 +74,7 @@ async function markAsRead(req, res, next) {
 async function markAllAsRead(req, res, next) {
   try {
     const userId = req.user.id;
-
-    // Mark all as read
-    await pool.execute('UPDATE notifications SET is_read = 1 WHERE user_id = ?', [userId]);
+    await NotificationModel.markAllAsRead(userId);
 
     res.json({
       success: true,

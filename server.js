@@ -17,6 +17,25 @@ fs.mkdirSync(path.join(__dirname, 'uploads/commissions'), { recursive: true });
 
 app.use(cors());
 app.use(express.json());
+// Helper for serving uploads with fallback between commissions and parts
+function handleUploadStatic(req, res, next) {
+  const { folder, filename } = req.params;
+  const targetPath = path.join(__dirname, 'uploads', folder, filename);
+  if (fs.existsSync(targetPath)) {
+    return res.sendFile(targetPath);
+  }
+  // Fallback: If requested in commissions but saved in parts
+  if (folder === 'commissions') {
+    const fallbackPath = path.join(__dirname, 'uploads', 'parts', filename);
+    if (fs.existsSync(fallbackPath)) {
+      return res.sendFile(fallbackPath);
+    }
+  }
+  next();
+}
+
+app.get('/uploads/:folder/:filename', handleUploadStatic);
+app.get('/api/uploads/:folder/:filename', handleUploadStatic);
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/api/uploads', express.static(path.join(__dirname, 'uploads')));
 

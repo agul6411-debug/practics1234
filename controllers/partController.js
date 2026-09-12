@@ -1,4 +1,6 @@
-const pool = require('../db');
+﻿const PartModel = require('../models/PartModel');
+const VendorModel = require('../models/VendorModel');
+const RequestModel = require('../models/RequestModel');
 
 /**
  * Add a new part (Vendor only, expects multipart/form-data)
@@ -8,8 +10,7 @@ async function addPart(req, res, next) {
     const userId = req.user.id;
 
     // Find vendor profile
-    const [vendRows] = await pool.execute('SELECT * FROM vendors WHERE user_id = ?', [userId]);
-    const vendor = vendRows[0] || null;
+    const vendor = await VendorModel.findByUserId(userId);
     if (!vendor) {
       res.status(404);
       throw new Error('Vendor profile not found');
@@ -53,16 +54,10 @@ async function addPart(req, res, next) {
     }
 
     if (cleanBarcode) {
-      const [existingParts] = await pool.execute(
-        'SELECT id FROM parts WHERE LOWER(TRIM(barcode_number)) = LOWER(TRIM(?))',
-        [cleanBarcode]
-      );
-      const [existingRequests] = await pool.execute(
-        'SELECT id FROM requests WHERE LOWER(TRIM(verified_barcode)) = LOWER(TRIM(?))',
-        [cleanBarcode]
-      );
+      const existingPart = await PartModel.findByBarcode(cleanBarcode);
+      const existingRequest = await RequestModel.findByVerifiedBarcode(cleanBarcode);
 
-      if (existingParts.length > 0 || existingRequests.length > 0) {
+      if (existingPart || existingRequest) {
         return res.status(400).json({
           success: false,
           message: 'Security Alert: This Barcode/QR number has already been registered or sold in the system for another product listing. Duplicate/copied barcodes are strictly prohibited.'
@@ -76,29 +71,19 @@ async function addPart(req, res, next) {
     const original_photo_url = `/uploads/parts/${originalPhotoFile.filename}`;
     const barcode_photo_url = `/uploads/parts/${barcodePhotoFile.filename}`;
 
-    // Create part record
-    const [result] = await pool.execute(
-      `INSERT INTO parts (vendor_id, brand_id, part_type_id, model_name, price, condition_type, stock_quantity, image_url, barcode_number, original_photo_url, barcode_photo_url)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        vendor.id,
-        parseInt(brand_id, 10),
-        parseInt(part_type_id, 10),
-        model_name,
-        parseFloat(price),
-        condition_type,
-        stock_quantity !== undefined ? parseInt(stock_quantity, 10) : 1,
-        original_photo_url,
-        cleanBarcode,
-        original_photo_url,
-        barcode_photo_url
-      ]
-    );
-    const partId = result.insertId;
-
-    // Get created part
-    const [partRows] = await pool.execute('SELECT * FROM parts WHERE id = ?', [partId]);
-    const createdPart = partRows[0] || null;
+    const createdPart = await PartModel.create({
+      vendorId: vendor.id,
+      brandId: brand_id,
+      partTypeId: part_type_id,
+      modelName: model_name,
+      price: price,
+      conditionType: condition_type,
+      stockQuantity: stock_quantity,
+      imageUrl: original_photo_url,
+      barcodeNumber: cleanBarcode,
+      originalPhotoUrl: original_photo_url,
+      barcodePhotoUrl: barcode_photo_url
+    });
 
     res.status(201).json({
       success: true,
@@ -124,23 +109,13 @@ async function getMyParts(req, res, next) {
     const userId = req.user.id;
 
     // Find vendor profile
-    const [vendRows] = await pool.execute('SELECT * FROM vendors WHERE user_id = ?', [userId]);
-    const vendor = vendRows[0] || null;
+    const vendor = await VendorModel.findByUserId(userId);
     if (!vendor) {
       res.status(404);
       throw new Error('Vendor profile not found');
     }
 
-    // Get parts by vendor
-    const [parts] = await pool.execute(
-      `SELECT p.*, b.name as brand_name, pt.name as part_type_name
-       FROM parts p
-       LEFT JOIN brands b ON p.brand_id = b.id
-       LEFT JOIN part_types pt ON p.part_type_id = pt.id
-       WHERE p.vendor_id = ? AND p.status = 'available'
-       ORDER BY p.created_at DESC`,
-      [vendor.id]
-    );
+    const parts = await PartModel.findByVendorId(vendor.id);
 
     res.json({
       success: true,
@@ -159,8 +134,7 @@ async function updatePart(req, res, next) {
     const userId = req.user.id;
 
     // Find vendor profile
-    const [vendRows] = await pool.execute('SELECT * FROM vendors WHERE user_id = ?', [userId]);
-    const vendor = vendRows[0] || null;
+    const vendor = await VendorModel.findByUserId(userId);
     if (!vendor) {
       res.status(404);
       throw new Error('Vendor profile not found');
@@ -169,9 +143,7 @@ async function updatePart(req, res, next) {
     const partId = req.params.id;
 
     // Get part by ID
-    const [partRows] = await pool.execute('SELECT * FROM parts WHERE id = ?', [partId]);
-    const part = partRows[0] || null;
-
+    const part = await PartModel.findById(partId);
     if (!part) {
       res.status(404);
       throw new Error('Part not found');
@@ -194,16 +166,10 @@ async function updatePart(req, res, next) {
     }
 
     if (cleanBarcode) {
-      const [existingParts] = await pool.execute(
-        'SELECT id FROM parts WHERE LOWER(TRIM(barcode_number)) = LOWER(TRIM(?)) AND id != ?',
-        [cleanBarcode, partId]
-      );
-      const [existingRequests] = await pool.execute(
-        'SELECT id FROM requests WHERE LOWER(TRIM(verified_barcode)) = LOWER(TRIM(?))',
-        [cleanBarcode]
-      );
+      const existingPart = await PartModel.findByBarcode(cleanBarcode, partId);
+      const existingRequest = await RequestModel.findByVerifiedBarcode(cleanBarcode);
 
-      if (existingParts.length > 0 || existingRequests.length > 0) {
+      if (existingPart || existingRequest) {
         return res.status(400).json({
           success: false,
           message: 'Security Alert: This Barcode/QR number has already been registered or sold in the system for another product listing.'
@@ -231,25 +197,7 @@ async function updatePart(req, res, next) {
       }
     }
 
-    const allowedFields = ['price', 'stock_quantity', 'condition_type', 'status', 'image_url', 'model_name', 'barcode_number', 'original_photo_url', 'barcode_photo_url'];
-    const updates = [];
-    const values = [];
-
-    for (const field of allowedFields) {
-      if (fieldsToUpdate[field] !== undefined) {
-        updates.push(`${field} = ?`);
-        values.push(fieldsToUpdate[field]);
-      }
-    }
-
-    if (updates.length > 0) {
-      values.push(partId);
-      await pool.execute(`UPDATE parts SET ${updates.join(', ')} WHERE id = ?`, values);
-    }
-
-    // Get updated part
-    const [updatedPartRows] = await pool.execute('SELECT * FROM parts WHERE id = ?', [partId]);
-    const updatedPart = updatedPartRows[0] || null;
+    const updatedPart = await PartModel.update(partId, fieldsToUpdate);
 
     res.json({
       success: true,
@@ -269,8 +217,7 @@ async function deletePart(req, res, next) {
     const userId = req.user.id;
 
     // Find vendor profile
-    const [vendRows] = await pool.execute('SELECT * FROM vendors WHERE user_id = ?', [userId]);
-    const vendor = vendRows[0] || null;
+    const vendor = await VendorModel.findByUserId(userId);
     if (!vendor) {
       res.status(404);
       throw new Error('Vendor profile not found');
@@ -279,9 +226,7 @@ async function deletePart(req, res, next) {
     const partId = req.params.id;
 
     // Get part by ID
-    const [partRows] = await pool.execute('SELECT * FROM parts WHERE id = ?', [partId]);
-    const part = partRows[0] || null;
-
+    const part = await PartModel.findById(partId);
     if (!part) {
       res.status(404);
       throw new Error('Part not found');
@@ -294,16 +239,7 @@ async function deletePart(req, res, next) {
       });
     }
 
-    // Try deleting part
-    try {
-      await pool.execute('DELETE FROM parts WHERE id = ?', [partId]);
-    } catch (err) {
-      if (err.code === 'ER_ROW_IS_REFERENCED_2' || err.errno === 1451) {
-        await pool.execute("UPDATE parts SET status = 'out_of_stock', stock_quantity = 0 WHERE id = ?", [partId]);
-      } else {
-        throw err;
-      }
-    }
+    await PartModel.delete(partId);
 
     res.json({
       success: true,
@@ -320,26 +256,7 @@ async function deletePart(req, res, next) {
 async function getPartDetails(req, res, next) {
   try {
     const partId = req.params.id;
-
-    // Public detail query joined with vendor shop details
-    const [rows] = await pool.execute(
-      `SELECT 
-        p.*,
-        b.name as brand_name,
-        pt.name as part_type_name,
-        v.user_id as vendor_user_id, v.shop_name, v.city as vendor_city, v.address as vendor_address,
-        COALESCE(ROUND(AVG(rv.rating), 1), 0) as average_rating,
-        COUNT(rv.id) as review_count
-      FROM parts p
-      JOIN vendors v ON p.vendor_id = v.id
-      LEFT JOIN brands b ON p.brand_id = b.id
-      LEFT JOIN part_types pt ON p.part_type_id = pt.id
-      LEFT JOIN reviews rv ON rv.vendor_id = v.id
-      WHERE p.id = ?
-      GROUP BY p.id, b.id, pt.id, v.id`,
-      [partId]
-    );
-    const part = rows[0] || null;
+    const part = await PartModel.findDetailsWithVendor(partId);
 
     if (!part) {
       return res.status(404).json({

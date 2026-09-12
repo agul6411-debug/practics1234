@@ -1,4 +1,7 @@
-const pool = require('../db');
+﻿const CommissionModel = require('../models/CommissionModel');
+const VendorModel = require('../models/VendorModel');
+const RequestModel = require('../models/RequestModel');
+const NotificationModel = require('../models/NotificationModel');
 
 /**
  * Allows a vendor to upload a payment proof URL for a commission.
@@ -8,8 +11,7 @@ async function uploadProof(req, res, next) {
     const userId = req.user.id;
 
     // Find vendor profile
-    const [vendRows] = await pool.execute('SELECT * FROM vendors WHERE user_id = ?', [userId]);
-    const vendor = vendRows[0] || null;
+    const vendor = await VendorModel.findByUserId(userId);
     if (!vendor) {
       res.status(404);
       throw new Error('Vendor profile not found');
@@ -30,8 +32,7 @@ async function uploadProof(req, res, next) {
     }
 
     // Get commission by ID
-    const [commRows] = await pool.execute('SELECT * FROM commissions WHERE id = ?', [commissionId]);
-    const commission = commRows[0] || null;
+    const commission = await CommissionModel.findById(commissionId);
     if (!commission) {
       res.status(404);
       throw new Error('Commission record not found');
@@ -53,17 +54,7 @@ async function uploadProof(req, res, next) {
     }
 
     // Update payment proof and set status to pending for admin verification
-    await pool.execute(
-      `UPDATE commissions 
-       SET payment_proof_url = ?, 
-           status = 'pending'
-       WHERE id = ?`,
-      [proofUrl, commissionId]
-    );
-
-    // Get updated commission
-    const [updatedCommRows] = await pool.execute('SELECT * FROM commissions WHERE id = ?', [commissionId]);
-    const updatedCommission = updatedCommRows[0] || null;
+    const updatedCommission = await CommissionModel.uploadProof(commissionId, proofUrl);
 
     res.json({
       success: true,
@@ -83,43 +74,17 @@ async function getMyCommissions(req, res, next) {
     const userId = req.user.id;
 
     // Find vendor profile
-    const [vendRows] = await pool.execute('SELECT * FROM vendors WHERE user_id = ?', [userId]);
-    const vendor = vendRows[0] || null;
+    const vendor = await VendorModel.findByUserId(userId);
     if (!vendor) {
       res.status(404);
       throw new Error('Vendor profile not found');
     }
 
     const { status } = req.query;
-
-    let query = `
-      SELECT 
-        c.id, c.request_id, c.vendor_id, c.amount, c.payment_proof_url, c.status, c.paid_at,
-        r.sequence_number, r.part_id,
-        p.model_name, p.price as part_price
-      FROM commissions c
-      JOIN requests r ON c.request_id = r.id
-      JOIN parts p ON r.part_id = p.id
-      WHERE c.vendor_id = ?
-    `;
-    const values = [vendor.id];
-
-    if (status && status !== 'all') {
-      query += ' AND c.status = ?';
-      values.push(status);
-    }
-
-    query += ' ORDER BY c.id DESC';
-
-    const [commissions] = await pool.execute(query, values);
+    const commissions = await CommissionModel.getByVendor(vendor.id, status);
 
     // Automatically mark vendor's commission notifications as read to stop repeated alerts
-    try {
-      await pool.execute(
-        "UPDATE notifications SET is_read = 1 WHERE user_id = ? AND type = 'commission'",
-        [userId]
-      );
-    } catch (_) {}
+    await NotificationModel.markReadByType(userId, 'commission');
 
     res.json({
       success: true,
@@ -137,27 +102,7 @@ async function getMyCommissions(req, res, next) {
 async function getAllCommissionsAdmin(req, res, next) {
   try {
     const { status } = req.query;
-
-    let query = `
-      SELECT 
-        c.id, c.request_id, c.vendor_id, c.amount, c.payment_proof_url, c.status, c.paid_at, c.verified_by,
-        v.shop_name, v.city as vendor_city,
-        p.model_name, p.price as part_price
-      FROM commissions c
-      JOIN vendors v ON c.vendor_id = v.id
-      JOIN requests r ON c.request_id = r.id
-      JOIN parts p ON r.part_id = p.id
-    `;
-    const values = [];
-
-    if (status && status !== 'all') {
-      query += ' WHERE c.status = ?';
-      values.push(status);
-    }
-
-    query += ' ORDER BY c.id DESC';
-
-    const [commissions] = await pool.execute(query, values);
+    const commissions = await CommissionModel.getAll(status);
 
     res.json({
       success: true,
@@ -178,8 +123,7 @@ async function verifyCommission(req, res, next) {
     const adminUserId = req.user.id;
 
     // Get commission by ID
-    const [commRows] = await pool.execute('SELECT * FROM commissions WHERE id = ?', [commissionId]);
-    const commission = commRows[0] || null;
+    const commission = await CommissionModel.findById(commissionId);
     if (!commission) {
       res.status(404);
       throw new Error('Commission record not found');
@@ -193,39 +137,27 @@ async function verifyCommission(req, res, next) {
     }
 
     // Mark as paid
-    await pool.execute(
-      `UPDATE commissions 
-       SET status = 'paid', paid_at = NOW(), verified_by = ? 
-       WHERE id = ?`,
-      [adminUserId, commissionId]
-    );
+    await CommissionModel.verify(commissionId, adminUserId);
 
     // Fetch the linked request to unlock customer+vendor pair
-    const [requestRows] = await pool.execute('SELECT * FROM requests WHERE id = ?', [commission.request_id]);
-    const request = requestRows[0] || null;
+    const request = await RequestModel.findById(commission.request_id);
     if (request) {
-      await pool.execute(
-        'UPDATE requests SET is_locked = 0 WHERE customer_id = ? AND vendor_id = ?',
-        [request.customer_id, request.vendor_id]
-      );
+      await RequestModel.unlockLeads(request.customer_id, request.vendor_id);
     }
 
     // Trigger notification to vendor user (wrapped in try/catch)
     try {
-      const [vendRows] = await pool.execute('SELECT * FROM vendors WHERE id = ?', [commission.vendor_id]);
-      const vendorRecord = vendRows[0] || null;
+      const vendorRecord = await VendorModel.findById(commission.vendor_id);
       if (vendorRecord) {
         // Mark old commission notifications as read to prevent duplicate popup/alert spam
-        await pool.execute(
-          "UPDATE notifications SET is_read = 1 WHERE user_id = ? AND type = 'commission'",
-          [vendorRecord.user_id]
-        );
+        await NotificationModel.markReadByType(vendorRecord.user_id, 'commission');
 
-        await pool.execute(
-          `INSERT INTO notifications (user_id, message, type, is_read)
-           VALUES (?, 'Your commission payment was verified. Your leads with this customer are now unlocked.', 'commission', 0)`,
-          [vendorRecord.user_id]
-        );
+        await NotificationModel.create({
+          userId: vendorRecord.user_id,
+          message: 'Your commission payment was verified. Your leads with this customer are now unlocked.',
+          type: 'commission',
+          isRead: 0
+        });
       }
     } catch (notifErr) {
       console.error('Notification creation failed in verifyCommission:', notifErr.message);
@@ -248,26 +180,25 @@ async function rejectCommission(req, res, next) {
     const commissionId = req.params.id;
 
     // Get commission by ID
-    const [commRows] = await pool.execute('SELECT * FROM commissions WHERE id = ?', [commissionId]);
-    const commission = commRows[0] || null;
+    const commission = await CommissionModel.findById(commissionId);
     if (!commission) {
       res.status(404);
       throw new Error('Commission record not found');
     }
 
     // Mark as rejected
-    await pool.execute("UPDATE commissions SET status = 'rejected' WHERE id = ?", [commissionId]);
+    await CommissionModel.reject(commissionId);
 
     // Trigger notification to vendor user (wrapped in try/catch)
     try {
-      const [vendRows] = await pool.execute('SELECT * FROM vendors WHERE id = ?', [commission.vendor_id]);
-      const vendorRecord = vendRows[0] || null;
+      const vendorRecord = await VendorModel.findById(commission.vendor_id);
       if (vendorRecord) {
-        await pool.execute(
-          `INSERT INTO notifications (user_id, message, type, is_read)
-           VALUES (?, 'Your payment proof was rejected. Please resubmit.', 'commission', 0)`,
-          [vendorRecord.user_id]
-        );
+        await NotificationModel.create({
+          userId: vendorRecord.user_id,
+          message: 'Your payment proof was rejected. Please resubmit.',
+          type: 'commission',
+          isRead: 0
+        });
       }
     } catch (notifErr) {
       console.error('Notification creation failed in rejectCommission:', notifErr.message);

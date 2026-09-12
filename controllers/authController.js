@@ -1,4 +1,7 @@
-const pool = require('../db');
+﻿const UserModel = require('../models/UserModel');
+const CustomerModel = require('../models/CustomerModel');
+const VendorModel = require('../models/VendorModel');
+const NotificationModel = require('../models/NotificationModel');
 const { hashPassword, comparePassword, generateToken } = require('../utils');
 const { sendOtpEmail } = require('../utils/emailService');
 
@@ -40,23 +43,25 @@ async function registerCustomer(req, res, next) {
     }
 
     // Check if email already exists
-    const [existingUserRows] = await pool.execute('SELECT * FROM users WHERE email = ?', [email]);
-    if (existingUserRows.length > 0) {
+    const existingUser = await UserModel.findByEmail(email);
+    if (existingUser) {
       res.status(409); // Conflict
       throw new Error('Email address already registered');
     }
 
     const otp = generate6DigitOtp();
     const hashedPassword = await hashPassword(password);
-    const [userResult] = await pool.execute(
-      `INSERT INTO users (name, email, password, phone, role, is_email_verified, email_otp, otp_expires_at) 
-       VALUES (?, ?, ?, ?, ?, 0, ?, DATE_ADD(NOW(), INTERVAL 10 MINUTE))`,
-      [name, email, hashedPassword, phone || null, 'customer', otp]
-    );
-    const userId = userResult.insertId;
+    const userId = await UserModel.create({
+      name,
+      email,
+      password: hashedPassword,
+      phone,
+      role: 'customer',
+      otp
+    });
 
     // Create customer profile
-    await pool.execute('INSERT INTO customers (user_id, city) VALUES (?, ?)', [userId, city]);
+    await CustomerModel.create({ userId, city });
 
     // Send OTP via Mailtrap
     try {
@@ -101,8 +106,8 @@ async function registerVendor(req, res, next) {
     }
 
     // Check if email already exists
-    const [existingUserRows] = await pool.execute('SELECT * FROM users WHERE email = ?', [email]);
-    if (existingUserRows.length > 0) {
+    const existingUser = await UserModel.findByEmail(email);
+    if (existingUser) {
       res.status(409);
       throw new Error('Email address already registered');
     }
@@ -122,37 +127,36 @@ async function registerVendor(req, res, next) {
 
     const otp = generate6DigitOtp();
     const hashedPassword = await hashPassword(password);
-    const [userResult] = await pool.execute(
-      `INSERT INTO users (name, email, password, phone, role, is_email_verified, email_otp, otp_expires_at) 
-       VALUES (?, ?, ?, ?, ?, 0, ?, DATE_ADD(NOW(), INTERVAL 10 MINUTE))`,
-      [name, email, hashedPassword, phone || null, 'vendor', otp]
-    );
-    const userId = userResult.insertId;
+    const userId = await UserModel.create({
+      name,
+      email,
+      password: hashedPassword,
+      phone,
+      role: 'vendor',
+      otp
+    });
 
     // Create vendor profile with shop photo and CNIC photo
-    await pool.execute(
-      `INSERT INTO vendors (user_id, shop_name, verification_docs, shop_photo_url, cnic_photo_url, city, address, latitude, longitude, verification_status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
-      [
-        userId,
-        shop_name,
-        verification_docs || shopPhotoUrl || null,
-        shopPhotoUrl,
-        cnicPhotoUrl,
-        city,
-        address,
-        latitude !== undefined && latitude !== null ? latitude : null,
-        longitude !== undefined && longitude !== null ? longitude : null
-      ]
-    );
+    await VendorModel.create({
+      userId,
+      shopName: shop_name,
+      verificationDocs: verification_docs || shopPhotoUrl || null,
+      shopPhotoUrl,
+      cnicPhotoUrl,
+      city,
+      address,
+      latitude,
+      longitude
+    });
 
     // Create initial Security Deposit notification
     try {
-      await pool.execute(
-        `INSERT INTO notifications (user_id, message, type, is_read)
-         VALUES (?, '⚠️ SECURITY DEPOSIT REQUIRED: Please pay Rs. 500 refundable deposit via JazzCash (03080780593) to respond to customer part requests.', 'system', 0)`,
-        [userId]
-      );
+      await NotificationModel.create({
+        userId,
+        message: '⚠️ SECURITY DEPOSIT REQUIRED: Please pay Rs. 500 refundable deposit via JazzCash (03080780593) to respond to customer part requests.',
+        type: 'system',
+        isRead: 0
+      });
     } catch (notifErr) {
       console.error('Notification creation failed for vendor deposit:', notifErr.message);
     }
@@ -186,17 +190,14 @@ async function sendOtp(req, res, next) {
       throw new Error('Email is required');
     }
 
-    const [userRows] = await pool.execute('SELECT * FROM users WHERE email = ?', [email]);
-    if (userRows.length === 0) {
+    const user = await UserModel.findByEmail(email);
+    if (!user) {
       res.status(404);
       throw new Error('No account found with this email address');
     }
 
     const otp = generate6DigitOtp();
-    await pool.execute(
-      'UPDATE users SET email_otp = ?, otp_expires_at = DATE_ADD(NOW(), INTERVAL 10 MINUTE) WHERE email = ?',
-      [otp, email]
-    );
+    await UserModel.updateOtpByEmail(email, otp);
 
     await sendOtpEmail(email, otp);
 
@@ -220,24 +221,16 @@ async function verifyOtp(req, res, next) {
       throw new Error('Email and OTP code are required');
     }
 
-    const [userRows] = await pool.execute(
-      `SELECT * FROM users 
-       WHERE email = ? AND email_otp = ? AND (otp_expires_at IS NULL OR otp_expires_at > NOW())`,
-      [email, otp.trim()]
-    );
+    const user = await UserModel.findValidOtpUser(email, otp.trim());
 
-    if (userRows.length === 0) {
+    if (!user) {
       return res.status(400).json({
         success: false,
         message: '🚨 Invalid or expired OTP code. Please request a new OTP.'
       });
     }
 
-    const user = userRows[0];
-    await pool.execute(
-      'UPDATE users SET is_email_verified = 1, email_otp = NULL, otp_expires_at = NULL WHERE id = ?',
-      [user.id]
-    );
+    await UserModel.markEmailVerified(user.id);
 
     res.json({
       success: true,
@@ -261,8 +254,7 @@ async function login(req, res, next) {
     }
 
     // Search user by email
-    const [userRows] = await pool.execute('SELECT * FROM users WHERE email = ?', [email]);
-    const user = userRows[0] || null;
+    const user = await UserModel.findByEmail(email);
     if (!user) {
       res.status(401);
       throw new Error('Invalid email or password');
@@ -284,10 +276,7 @@ async function login(req, res, next) {
     // Check Email OTP Verification status
     if (user.is_email_verified == 0 || user.is_email_verified == false) {
       const otp = generate6DigitOtp();
-      await pool.execute(
-        'UPDATE users SET email_otp = ?, otp_expires_at = DATE_ADD(NOW(), INTERVAL 10 MINUTE) WHERE id = ?',
-        [otp, user.id]
-      );
+      await UserModel.updateOtpById(user.id, otp);
       try {
         await sendOtpEmail(user.email, otp);
       } catch (mailErr) {
@@ -305,8 +294,7 @@ async function login(req, res, next) {
     // Load respective profile info
     let profile = {};
     if (user.role === 'customer') {
-      const [custRows] = await pool.execute('SELECT * FROM customers WHERE user_id = ?', [user.id]);
-      const customerProfile = custRows[0] || null;
+      const customerProfile = await CustomerModel.findByUserId(user.id);
       if (customerProfile) {
         profile = {
           customer_id: customerProfile.id,
@@ -314,8 +302,7 @@ async function login(req, res, next) {
         };
       }
     } else if (user.role === 'vendor') {
-      const [vendRows] = await pool.execute('SELECT * FROM vendors WHERE user_id = ?', [user.id]);
-      const vendorProfile = vendRows[0] || null;
+      const vendorProfile = await VendorModel.findByUserId(user.id);
       if (vendorProfile) {
         profile = {
           vendor_id: vendorProfile.id,
@@ -368,17 +355,14 @@ async function forgotPassword(req, res, next) {
       throw new Error('Valid email address is required');
     }
 
-    const [userRows] = await pool.execute('SELECT * FROM users WHERE email = ?', [email.trim()]);
-    if (userRows.length === 0) {
+    const user = await UserModel.findByEmail(email.trim());
+    if (!user) {
       res.status(404);
       throw new Error('No account found with this email address');
     }
 
     const otp = generate6DigitOtp();
-    await pool.execute(
-      'UPDATE users SET email_otp = ?, otp_expires_at = DATE_ADD(NOW(), INTERVAL 10 MINUTE) WHERE email = ?',
-      [otp, email.trim()]
-    );
+    await UserModel.updateOtpByEmail(email.trim(), otp);
 
     try {
       await sendOtpEmail(email.trim(), otp);
@@ -411,28 +395,17 @@ async function resetPassword(req, res, next) {
       throw new Error('New password must be at least 6 characters long');
     }
 
-    const [userRows] = await pool.execute(
-      `SELECT * FROM users 
-       WHERE email = ? AND email_otp = ? AND (otp_expires_at IS NULL OR otp_expires_at > NOW())`,
-      [email.trim(), otp.trim()]
-    );
+    const user = await UserModel.findValidOtpUser(email.trim(), otp.trim());
 
-    if (userRows.length === 0) {
+    if (!user) {
       return res.status(400).json({
         success: false,
         message: '🚨 Invalid or expired OTP code. Please request a new password reset.'
       });
     }
 
-    const user = userRows[0];
     const hashedPassword = await hashPassword(new_password);
-
-    await pool.execute(
-      `UPDATE users 
-       SET password = ?, is_email_verified = 1, email_otp = NULL, otp_expires_at = NULL 
-       WHERE id = ?`,
-      [hashedPassword, user.id]
-    );
+    await UserModel.resetPassword(user.id, hashedPassword);
 
     res.json({
       success: true,

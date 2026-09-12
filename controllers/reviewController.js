@@ -1,4 +1,6 @@
-const pool = require('../db');
+﻿const ReviewModel = require('../models/ReviewModel');
+const CustomerModel = require('../models/CustomerModel');
+const RequestModel = require('../models/RequestModel');
 
 /**
  * Allows a customer to submit a review for a responded/available request.
@@ -8,8 +10,7 @@ async function addReview(req, res, next) {
     const userId = req.user.id;
 
     // Find customer profile
-    const [custRows] = await pool.execute('SELECT * FROM customers WHERE user_id = ?', [userId]);
-    const customer = custRows[0] || null;
+    const customer = await CustomerModel.findByUserId(userId);
     if (!customer) {
       res.status(404);
       throw new Error('Customer profile not found');
@@ -28,8 +29,7 @@ async function addReview(req, res, next) {
     }
 
     // Get request by ID
-    const [requestRows] = await pool.execute('SELECT * FROM requests WHERE id = ?', [request_id]);
-    const request = requestRows[0] || null;
+    const request = await RequestModel.findById(request_id);
     if (!request) {
       res.status(404);
       throw new Error('Request not found');
@@ -52,8 +52,8 @@ async function addReview(req, res, next) {
     }
 
     // Confirm no existing review for this request_id
-    const [existingReviewRows] = await pool.execute('SELECT * FROM reviews WHERE request_id = ?', [request_id]);
-    if (existingReviewRows.length > 0) {
+    const existingReview = await ReviewModel.findByRequestId(request_id);
+    if (existingReview) {
       return res.status(400).json({
         success: false,
         message: 'You already reviewed this request'
@@ -61,29 +61,18 @@ async function addReview(req, res, next) {
     }
 
     // Create review
-    const [result] = await pool.execute(
-      'INSERT INTO reviews (request_id, customer_id, vendor_id, rating, comment) VALUES (?, ?, ?, ?, ?)',
-      [
-        request_id,
-        customer.id,
-        request.vendor_id,
-        numericRating,
-        comment || null
-      ]
-    );
-    const reviewId = result.insertId;
+    const createdReview = await ReviewModel.create({
+      request_id,
+      customerId: customer.id,
+      vendorId: request.vendor_id,
+      rating: numericRating,
+      comment: comment || null
+    });
 
     res.status(201).json({
       success: true,
       message: 'Review submitted successfully',
-      data: {
-        id: reviewId,
-        request_id,
-        customer_id: customer.id,
-        vendor_id: request.vendor_id,
-        rating: numericRating,
-        comment
-      }
+      data: createdReview
     });
   } catch (error) {
     next(error);
@@ -101,30 +90,13 @@ async function getVendorReviews(req, res, next) {
       throw new Error('vendorId parameter is required');
     }
 
-    // Get reviews by vendor
-    const [reviews] = await pool.execute(
-      `SELECT 
-        rv.id, rv.request_id, rv.rating, rv.comment, rv.created_at,
-        u.name as customer_name
-      FROM reviews rv
-      JOIN customers c ON rv.customer_id = c.id
-      JOIN users u ON c.user_id = u.id
-      WHERE rv.vendor_id = ?
-      ORDER BY rv.created_at DESC`,
-      [vendorId]
-    );
-
-    let averageRating = 0;
-    if (reviews.length > 0) {
-      const sum = reviews.reduce((acc, curr) => acc + Number(curr.rating), 0);
-      averageRating = Number((sum / reviews.length).toFixed(1));
-    }
+    const result = await ReviewModel.getByVendorId(vendorId);
 
     res.json({
       success: true,
-      average_rating: averageRating,
-      count: reviews.length,
-      data: reviews
+      average_rating: result.averageRating,
+      count: result.count,
+      data: result.reviews
     });
   } catch (error) {
     next(error);
