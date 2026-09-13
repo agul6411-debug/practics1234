@@ -1,4 +1,4 @@
-﻿const RequestModel = require('../models/RequestModel');
+const RequestModel = require('../models/RequestModel');
 const PartModel = require('../models/PartModel');
 const VendorModel = require('../models/VendorModel');
 const CustomerModel = require('../models/CustomerModel');
@@ -299,8 +299,9 @@ async function respondToRequest(req, res, next) {
       });
     }
 
-    // Update request status
-    await RequestModel.updateStatus(requestId, status);
+    // Update request status — use 'responded' for available so customer sees Review button
+    const dbStatus = status === 'available' ? 'responded' : 'not_available';
+    await RequestModel.updateStatus(requestId, dbStatus);
 
     // Trigger notification to customer user (wrapped in try/catch)
     try {
@@ -308,7 +309,7 @@ async function respondToRequest(req, res, next) {
       const part = await PartModel.findById(request.part_id);
 
       if (customerRecord && part) {
-        const statusDisplay = status === 'available' ? 'Available' : 'Not Available';
+        const statusDisplay = status === 'available' ? 'Available ✅' : 'Not Available ❌';
         await NotificationModel.create({
           userId: customerRecord.user_id,
           message: `Vendor responded to your request for ${part.model_name}: ${statusDisplay}`,
@@ -323,7 +324,7 @@ async function respondToRequest(req, res, next) {
     res.json({
       success: true,
       message: 'Request response submitted successfully',
-      data: { id: parseInt(requestId, 10), status }
+      data: { id: parseInt(requestId, 10), status: dbStatus }
     });
   } catch (error) {
     next(error);

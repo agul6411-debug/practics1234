@@ -1,4 +1,4 @@
-﻿const VendorModel = require('../models/VendorModel');
+const VendorModel = require('../models/VendorModel');
 const UserModel = require('../models/UserModel');
 const PartModel = require('../models/PartModel');
 const RequestModel = require('../models/RequestModel');
@@ -147,7 +147,7 @@ async function getDashboardStats(req, res, next) {
     const [totalVendors, totalCustomers, totalParts, totalRequests, pendingVendorApprovals] =
       await Promise.all([
         VendorModel.countAll(),
-        UserModel.countAll ? (await UserModel.getAll({ role: 'customer' })).length : 0,
+        UserModel.countByRole('customer'),
         PartModel.countAll(),
         RequestModel.countAll(),
         VendorModel.countPending()

@@ -1,4 +1,4 @@
-﻿const pool = require('../db');
+const pool = require('../db');
 
 class ReviewModel {
   static async findById(id) {
@@ -11,16 +11,19 @@ class ReviewModel {
     return rows[0] || null;
   }
 
-  static async create({ requestId, customerId, vendorId, rating, comment = null }) {
+  static async create({ requestId, request_id, customerId, customer_id, vendorId, vendor_id, rating, comment = null }) {
+    const reqId = requestId || request_id;
+    const cId = customerId || customer_id;
+    const vId = vendorId || vendor_id;
     const [result] = await pool.execute(
       'INSERT INTO reviews (request_id, customer_id, vendor_id, rating, comment) VALUES (?, ?, ?, ?, ?)',
-      [requestId, customerId, vendorId, rating, comment]
+      [reqId, cId, vId, rating, comment]
     );
     return {
       id: result.insertId,
-      request_id: requestId,
-      customer_id: customerId,
-      vendor_id: vendorId,
+      request_id: reqId,
+      customer_id: cId,
+      vendor_id: vId,
       rating,
       comment
     };

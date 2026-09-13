@@ -1,4 +1,4 @@
-﻿const ReviewModel = require('../models/ReviewModel');
+const ReviewModel = require('../models/ReviewModel');
 const CustomerModel = require('../models/CustomerModel');
 const RequestModel = require('../models/RequestModel');
 
@@ -62,7 +62,7 @@ async function addReview(req, res, next) {
 
     // Create review
     const createdReview = await ReviewModel.create({
-      request_id,
+      requestId: request_id,
       customerId: customer.id,
       vendorId: request.vendor_id,
       rating: numericRating,

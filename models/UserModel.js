@@ -1,4 +1,4 @@
-﻿const pool = require('../db');
+const pool = require('../db');
 
 class UserModel {
   static async findByEmail(email) {
@@ -64,7 +64,7 @@ class UserModel {
   }
 
   static async getAll({ role } = {}) {
-    let query = 'SELECT id, name, email, phone, role, status, created_at FROM users';
+    let query = 'SELECT id, name, email, phone, role, status, is_email_verified, created_at FROM users';
     const values = [];
 
     if (role) {
@@ -96,6 +96,15 @@ class UserModel {
     const [rows] = await pool.execute('SELECT id FROM users WHERE role = ?', [role]);
     return rows;
   }
+
+  static async countByRole(role) {
+    const [rows] = await pool.execute(
+      'SELECT COUNT(*) as count FROM users WHERE role = ?',
+      [role]
+    );
+    return rows[0].count;
+  }
 }
 
 module.exports = UserModel;
+

@@ -1,4 +1,4 @@
-﻿const pool = require('../db');
+const pool = require('../db');
 
 class RequestModel {
   static async findById(id) {
@@ -78,7 +78,7 @@ class RequestModel {
         r.delivery_type, r.delivery_address, r.delivery_city, r.delivery_phone, r.delivery_notes,
         r.delivery_fee, r.total_amount,
         r.cancellation_reason, r.cancelled_by, r.cancelled_at,
-        p.id as part_id, p.model_name, p.price, p.image_url,
+        p.id as part_id, p.model_name, p.price, p.image_url, p.original_photo_url,
         v.id as vendor_id, v.user_id as vendor_user_id, v.shop_name, v.city as vendor_city, v.address as vendor_address,
         b.name as brand_name, pt.name as part_type_name
       FROM requests r
