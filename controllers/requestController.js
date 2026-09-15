@@ -567,11 +567,73 @@ async function cancelRequestByVendor(req, res, next) {
   }
 }
 
+/**
+ * Customer confirms receipt of part delivery (Option 2 - Manual Confirmation)
+ */
+async function confirmDeliveryManual(req, res, next) {
+  try {
+    const userId = req.user.id;
+    const customer = await CustomerModel.findByUserId(userId);
+    if (!customer) {
+      res.status(404);
+      throw new Error('Customer profile not found');
+    }
+
+    const requestId = req.params.id;
+    const request = await RequestModel.findById(requestId);
+    if (!request) {
+      res.status(404);
+      throw new Error('Request not found');
+    }
+
+    if (request.customer_id !== customer.id) {
+      return res.status(403).json({
+        success: false,
+        message: 'Forbidden. You do not own this order.'
+      });
+    }
+
+    if (request.status === 'delivered') {
+      return res.status(400).json({
+        success: false,
+        message: 'This delivery has already been confirmed as delivered.'
+      });
+    }
+
+    await RequestModel.confirmDeliveryCustomer(requestId, customer.id);
+    await PartModel.markOutOfStock(request.part_id);
+
+    // Notify Vendor
+    try {
+      const vendor = await VendorModel.findById(request.vendor_id);
+      const part = await PartModel.findById(request.part_id);
+      if (vendor) {
+        await NotificationModel.create({
+          userId: vendor.user_id,
+          message: `✅ Order #${requestId} (${part ? part.model_name : 'Component'}) delivery was confirmed by the customer! Sale completed.`,
+          type: 'response',
+          isRead: 0
+        });
+      }
+    } catch (_) {}
+
+    res.json({
+      success: true,
+      message: 'Delivery confirmed successfully! You can now leave a review for this vendor.',
+      data: { id: parseInt(requestId, 10), status: 'delivered' }
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   createRequest,
   getMyRequests,
   getVendorRequests,
   respondToRequest,
   cancelRequestByVendor,
-  verifyDelivery
+  verifyDelivery,
+  confirmDeliveryManual
 };
+

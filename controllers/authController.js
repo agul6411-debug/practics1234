@@ -1,4 +1,4 @@
-﻿const UserModel = require('../models/UserModel');
+const UserModel = require('../models/UserModel');
 const CustomerModel = require('../models/CustomerModel');
 const VendorModel = require('../models/VendorModel');
 const NotificationModel = require('../models/NotificationModel');
@@ -416,6 +416,45 @@ async function resetPassword(req, res, next) {
   }
 }
 
+/**
+ * User (Customer or Vendor) requests account deletion
+ */
+async function requestAccountDeletion(req, res, next) {
+  try {
+    const userId = req.user.id;
+    const { reason } = req.body;
+    const cleanReason = reason && reason.trim() !== '' ? reason.trim() : 'User requested account closure';
+
+    const user = await UserModel.findById(userId);
+    if (!user) {
+      res.status(404);
+      throw new Error('User not found');
+    }
+
+    await UserModel.requestDeletion(userId, cleanReason);
+
+    // Notify Admins
+    try {
+      const admins = await UserModel.getAdminUsers();
+      for (const admin of admins) {
+        await NotificationModel.create({
+          userId: admin.id,
+          message: `🚨 ACCOUNT DELETION REQUEST: User '${user.name}' (${user.role} - ID: ${user.id}) has requested account deletion. Reason: ${cleanReason}`,
+          type: 'system',
+          isRead: 0
+        });
+      }
+    } catch (_) {}
+
+    res.json({
+      success: true,
+      message: 'Account deletion request submitted to admin for review.'
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   registerCustomer,
   registerVendor,
@@ -423,5 +462,7 @@ module.exports = {
   verifyOtp,
   login,
   forgotPassword,
-  resetPassword
+  resetPassword,
+  requestAccountDeletion
 };
+

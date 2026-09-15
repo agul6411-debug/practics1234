@@ -144,14 +144,23 @@ async function unblockUser(req, res, next) {
  */
 async function getDashboardStats(req, res, next) {
   try {
-    const [totalVendors, totalCustomers, totalParts, totalRequests, pendingVendorApprovals] =
-      await Promise.all([
-        VendorModel.countAll(),
-        UserModel.countByRole('customer'),
-        PartModel.countAll(),
-        RequestModel.countAll(),
-        VendorModel.countPending()
-      ]);
+    const [
+      totalVendors,
+      totalCustomers,
+      totalParts,
+      totalRequests,
+      pendingVendorApprovals,
+      totalPartsSold,
+      totalSalesGMV
+    ] = await Promise.all([
+      VendorModel.countAll(),
+      UserModel.countByRole('customer'),
+      PartModel.countAll(),
+      RequestModel.countAll(),
+      VendorModel.countPending(),
+      RequestModel.countSoldParts(),
+      RequestModel.getTotalSalesGMV()
+    ]);
 
     res.json({
       success: true,
@@ -160,13 +169,16 @@ async function getDashboardStats(req, res, next) {
         totalCustomers,
         totalParts,
         totalRequests,
-        pendingVendorApprovals
+        pendingVendorApprovals,
+        totalPartsSold,
+        totalSalesGMV
       }
     });
   } catch (error) {
     next(error);
   }
 }
+
 
 /**
  * Public & Vendor endpoint to fetch current system settings
@@ -328,6 +340,80 @@ async function broadcastNotificationAdmin(req, res, next) {
   }
 }
 
+/**
+  * Admin: Get all verified platform sales with full delivery proofs and party details
+  */
+async function getSalesProof(req, res, next) {
+  try {
+    const list = await RequestModel.getSalesProofListAdmin();
+    const count = list.length;
+    const gmv = await RequestModel.getTotalSalesGMV();
+
+    res.json({
+      success: true,
+      total_sold_count: count,
+      total_sales_gmv: gmv,
+      data: list
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+  * Admin: Get 360-degree complete user profile details (Vendor or Customer analytics)
+  */
+async function getUser360(req, res, next) {
+  try {
+    const userId = req.params.id;
+    const user = await UserModel.findById(userId);
+    if (!user) {
+      res.status(404);
+      throw new Error('User account not found');
+    }
+
+    if (user.role === 'vendor') {
+      const data = await UserModel.getVendor360(userId);
+      return res.json({ success: true, role: 'vendor', data });
+    } else if (user.role === 'customer') {
+      const data = await UserModel.getCustomer360(userId);
+      return res.json({ success: true, role: 'customer', data });
+    } else {
+      return res.json({ success: true, role: 'admin', data: { user } });
+    }
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+  * Admin: Permanently delete a user account and safely cascade cleanup their data
+  */
+async function deleteUserAdmin(req, res, next) {
+  try {
+    const userId = req.params.id;
+    const targetUser = await UserModel.findById(userId);
+    if (!targetUser) {
+      res.status(404);
+      throw new Error('User not found');
+    }
+
+    if (targetUser.role === 'admin') {
+      res.status(403);
+      throw new Error('Cannot delete super administrator account');
+    }
+
+    await UserModel.deleteUserCascade(userId);
+
+    res.json({
+      success: true,
+      message: `User '${targetUser.name}' (${targetUser.role}) has been permanently deleted.`
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   getAllVendors,
   approveVendor,
@@ -341,5 +427,9 @@ module.exports = {
   getPublicSettings,
   updateSystemSettings,
   getAllNotificationsAdmin,
-  broadcastNotificationAdmin
+  broadcastNotificationAdmin,
+  getSalesProof,
+  getUser360,
+  deleteUserAdmin
 };
+

@@ -91,6 +91,8 @@ router.post('/categories/part-types', verifyToken, authorizeRoles('admin'), cate
 router.put('/categories/part-types/:id', verifyToken, authorizeRoles('admin'), categoryController.updatePartType);
 router.delete('/categories/part-types/:id', verifyToken, authorizeRoles('admin'), categoryController.deletePartType);
 
+router.post('/auth/request-deletion', verifyToken, authController.requestAccountDeletion);
+
 // =========================================================================
 // 5. Customer Routes (/api/customer)
 // =========================================================================
@@ -102,6 +104,7 @@ router.get('/customer/profile', verifyToken, authorizeRoles('customer'), custome
 router.put('/customer/profile', verifyToken, authorizeRoles('customer'), customerController.updateMyProfile);
 router.post('/customer/requests', verifyToken, authorizeRoles('customer'), requestController.createRequest);
 router.get('/customer/requests', verifyToken, authorizeRoles('customer'), requestController.getMyRequests);
+router.post('/customer/requests/:id/confirm-delivery', verifyToken, authorizeRoles('customer'), requestController.confirmDeliveryManual);
 router.post('/customer/verify-delivery', verifyToken, authorizeRoles('customer'), requestController.verifyDelivery);
 router.post('/customer/reviews', verifyToken, authorizeRoles('customer'), reviewController.addReview);
 
@@ -116,10 +119,14 @@ router.put('/admin/vendors/:id/verify-deposit', verifyToken, authorizeRoles('adm
 router.put('/admin/vendors/:id/reject-deposit', verifyToken, authorizeRoles('admin'), adminController.rejectVendorDeposit);
 
 router.get('/admin/users', verifyToken, authorizeRoles('admin'), adminController.getAllUsers);
+router.get('/admin/users/:id/360', verifyToken, authorizeRoles('admin'), adminController.getUser360);
+router.delete('/admin/users/:id', verifyToken, authorizeRoles('admin'), adminController.deleteUserAdmin);
 router.put('/admin/users/:id/block', verifyToken, authorizeRoles('admin'), adminController.blockUser);
 router.put('/admin/users/:id/unblock', verifyToken, authorizeRoles('admin'), adminController.unblockUser);
 
 router.get('/admin/dashboard', verifyToken, authorizeRoles('admin'), adminController.getDashboardStats);
+router.get('/admin/sales-proof', verifyToken, authorizeRoles('admin'), adminController.getSalesProof);
+
 
 router.get('/admin/commissions', verifyToken, authorizeRoles('admin'), commissionController.getAllCommissionsAdmin);
 router.put('/admin/commissions/:id/verify', verifyToken, authorizeRoles('admin'), commissionController.verifyCommission);

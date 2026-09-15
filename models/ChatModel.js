@@ -1,4 +1,4 @@
-﻿const pool = require('../db');
+const pool = require('../db');
 
 class ChatModel {
   static async getCustomerOrVendorId(userId, role) {
@@ -73,17 +73,23 @@ class ChatModel {
         p.barcode_number,
         u_cust.name as customer_name,
         v.shop_name as vendor_shop_name,
-        b.name as brand_name
+        b.name as brand_name,
+        COUNT(cm.id) as message_count,
+        MAX(cm.created_at) as last_message_at
       FROM chat_rooms cr
       JOIN customers c ON cr.customer_id = c.id
       JOIN users u_cust ON c.user_id = u_cust.id
       JOIN vendors v ON cr.vendor_id = v.id
       JOIN parts p ON cr.part_id = p.id
       LEFT JOIN brands b ON p.brand_id = b.id
-      ORDER BY cr.created_at DESC
+      JOIN chat_messages cm ON cm.room_id = cr.id
+      GROUP BY cr.id, p.id, u_cust.id, v.id, b.id
+      HAVING COUNT(cm.id) > 0
+      ORDER BY last_message_at DESC
     `);
     return rooms;
   }
+
 
   static async getRoomsForParticipant(role, participantId) {
     let query = '';
