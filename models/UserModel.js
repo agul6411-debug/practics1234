@@ -296,8 +296,22 @@ class UserModel {
       orders: ordersList,
     };
   }
+
+  static async countByRole(role) {
+    const [rows] = await pool.execute(
+      'SELECT COUNT(*) as count FROM users WHERE role = ?',
+      [role]
+    );
+    return rows[0].count;
+  }
+
+  static async countAll() {
+    const [rows] = await pool.execute('SELECT COUNT(*) as count FROM users');
+    return rows[0].count;
+  }
 }
 
 module.exports = UserModel;
+
 
 
