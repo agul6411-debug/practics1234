@@ -81,7 +81,7 @@ CREATE TABLE requests (
   part_id INT NOT NULL,
   sequence_number INT NOT NULL,
   is_locked BOOLEAN DEFAULT FALSE,
-  status ENUM('requested', 'responded', 'available', 'not_available', 'cancelled') DEFAULT 'requested',
+  status ENUM('requested', 'responded', 'available', 'not_available', 'delivered', 'cancelled') DEFAULT 'requested',
   delivery_type ENUM('shop_pickup', 'home_delivery') DEFAULT 'shop_pickup',
   delivery_address VARCHAR(255) DEFAULT NULL,
   delivery_city VARCHAR(100) DEFAULT NULL,
@@ -161,7 +161,7 @@ CREATE TABLE notifications (
   id INT AUTO_INCREMENT PRIMARY KEY,
   user_id INT NOT NULL,
   message TEXT NOT NULL,
-  type ENUM('request', 'commission', 'response', 'system') NOT NULL,
+  type ENUM('request', 'commission', 'response', 'system', 'chat') NOT NULL,
   is_read BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT

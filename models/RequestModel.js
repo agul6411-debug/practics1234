@@ -164,6 +164,16 @@ class RequestModel {
     );
   }
 
+  static async cancelByCustomer(requestId, customerId, cancelReason) {
+    const [result] = await pool.execute(
+      `UPDATE requests 
+       SET status = 'cancelled', cancellation_reason = ?, cancelled_by = 'customer', cancelled_at = NOW() 
+       WHERE id = ? AND customer_id = ?`,
+      [cancelReason, requestId, customerId]
+    );
+    return result.affectedRows > 0;
+  }
+
   static async unlockLeads(customerId, vendorId) {
     await pool.execute(
       'UPDATE requests SET is_locked = 0 WHERE customer_id = ? AND vendor_id = ?',

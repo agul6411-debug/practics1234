@@ -1,5 +1,8 @@
-﻿const ChatModel = require('../models/ChatModel');
+const ChatModel = require('../models/ChatModel');
 const PartModel = require('../models/PartModel');
+const VendorModel = require('../models/VendorModel');
+const CustomerModel = require('../models/CustomerModel');
+const NotificationModel = require('../models/NotificationModel');
 
 // Helper to escape HTML characters for basic input sanitization
 function escapeHtml(text) {
@@ -200,6 +203,34 @@ async function sendMessage(req, res, next) {
     }
 
     const createdMessage = await ChatModel.createMessage(roomId, userId, cleanMessage);
+
+    // Trigger notification to the other participant
+    try {
+      let recipientUserId = null;
+      if (role === 'customer') {
+        const vendor = await VendorModel.findById(room.vendor_id);
+        if (vendor) recipientUserId = vendor.user_id;
+      } else if (role === 'vendor') {
+        const customer = await CustomerModel.findById(room.customer_id);
+        if (customer) recipientUserId = customer.user_id;
+      }
+
+      if (recipientUserId) {
+        const part = await PartModel.findById(room.part_id);
+        const partTitle = part ? part.model_name : 'product listing';
+        const senderLabel = role === 'customer' ? 'Customer' : 'Vendor';
+        const preview = cleanMessage.length > 40 ? `${cleanMessage.substring(0, 40)}...` : cleanMessage;
+
+        await NotificationModel.create({
+          userId: recipientUserId,
+          message: `💬 ${senderLabel} message regarding ${partTitle}: "${preview}"`,
+          type: 'chat',
+          isRead: 0
+        });
+      }
+    } catch (notifErr) {
+      console.error('Chat notification creation failed:', notifErr.message);
+    }
 
     res.status(201).json({
       success: true,

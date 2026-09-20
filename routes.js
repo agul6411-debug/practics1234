@@ -47,6 +47,7 @@ router.post(
   partController.addPart
 );
 router.get('/vendor/parts', verifyToken, authorizeRoles('vendor'), partController.getMyParts);
+router.get('/vendor/parts/sold', verifyToken, authorizeRoles('vendor'), vendorController.getMySoldParts);
 router.put(
   '/vendor/parts/:id',
   verifyToken,
@@ -104,6 +105,7 @@ router.get('/customer/profile', verifyToken, authorizeRoles('customer'), custome
 router.put('/customer/profile', verifyToken, authorizeRoles('customer'), customerController.updateMyProfile);
 router.post('/customer/requests', verifyToken, authorizeRoles('customer'), requestController.createRequest);
 router.get('/customer/requests', verifyToken, authorizeRoles('customer'), requestController.getMyRequests);
+router.put('/customer/requests/:id/cancel', verifyToken, authorizeRoles('customer'), requestController.cancelRequestByCustomer);
 router.post('/customer/requests/:id/confirm-delivery', verifyToken, authorizeRoles('customer'), requestController.confirmDeliveryManual);
 router.post('/customer/verify-delivery', verifyToken, authorizeRoles('customer'), requestController.verifyDelivery);
 router.post('/customer/reviews', verifyToken, authorizeRoles('customer'), reviewController.addReview);

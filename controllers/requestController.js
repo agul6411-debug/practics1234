@@ -627,12 +627,90 @@ async function confirmDeliveryManual(req, res, next) {
   }
 }
 
+/**
+ * Customer Order Cancellation (Cancels pending/responded order, restores stock, notifies vendor)
+ */
+async function cancelRequestByCustomer(req, res, next) {
+  try {
+    const userId = req.user.id;
+    const customer = await CustomerModel.findByUserId(userId);
+    if (!customer) {
+      res.status(404);
+      throw new Error('Customer profile not found');
+    }
+
+    const requestId = req.params.id;
+    const { reason } = req.body;
+    const cancelReason = reason && reason.trim() !== '' ? reason.trim() : 'Customer cancelled order';
+
+    const request = await RequestModel.findById(requestId);
+    if (!request) {
+      res.status(404);
+      throw new Error('Request not found');
+    }
+
+    if (request.customer_id !== customer.id) {
+      return res.status(403).json({
+        success: false,
+        message: 'Forbidden. You do not own this order.'
+      });
+    }
+
+    if (request.status === 'cancelled') {
+      return res.status(400).json({
+        success: false,
+        message: 'This request has already been cancelled.'
+      });
+    }
+
+    if (request.status === 'delivered') {
+      return res.status(400).json({
+        success: false,
+        message: 'Completed orders cannot be cancelled.'
+      });
+    }
+
+    // 1. Update Request status to cancelled by customer
+    await RequestModel.cancelByCustomer(requestId, customer.id, cancelReason);
+
+    // 2. Restore Part Stock Quantity
+    await PartModel.restoreStock(request.part_id);
+
+    // 3. Notify Vendor
+    try {
+      const vendorRecord = await VendorModel.findById(request.vendor_id);
+      const part = await PartModel.findById(request.part_id);
+      const partModelName = part ? part.model_name : 'product';
+
+      if (vendorRecord) {
+        await NotificationModel.create({
+          userId: vendorRecord.user_id,
+          message: `Customer cancelled Order #${requestId} (${partModelName}). Reason: ${cancelReason}`,
+          type: 'response',
+          isRead: 0
+        });
+      }
+    } catch (notifErr) {
+      console.error('Vendor notification failed on customer cancellation:', notifErr.message);
+    }
+
+    res.json({
+      success: true,
+      message: 'Order cancelled successfully. Part stock restored.',
+      data: { id: parseInt(requestId, 10), status: 'cancelled' }
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   createRequest,
   getMyRequests,
   getVendorRequests,
   respondToRequest,
   cancelRequestByVendor,
+  cancelRequestByCustomer,
   verifyDelivery,
   confirmDeliveryManual
 };

@@ -43,11 +43,12 @@ async function addReview(req, res, next) {
       });
     }
 
-    // Confirm request status is 'responded' or 'available'
-    if (request.status !== 'responded' && request.status !== 'available') {
+    // Confirm request status is 'delivered', 'responded', or 'available'
+    const allowedStatuses = ['delivered', 'responded', 'available'];
+    if (!allowedStatuses.includes(request.status)) {
       return res.status(400).json({
         success: false,
-        message: 'You can only review after the vendor has responded'
+        message: 'You can only review after receiving the item or after the vendor has responded'
       });
     }
 

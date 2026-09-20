@@ -1,4 +1,4 @@
-﻿const pool = require('../db');
+const pool = require('../db');
 
 class PartModel {
   static async findById(id) {
@@ -72,14 +72,56 @@ class PartModel {
     return this.findById(result.insertId);
   }
 
-  static async findByVendorId(vendorId) {
+  static async findByVendorId(vendorId, status = 'available') {
+    let query = `SELECT p.*, b.name as brand_name, pt.name as part_type_name
+        FROM parts p
+        LEFT JOIN brands b ON p.brand_id = b.id
+        LEFT JOIN part_types pt ON p.part_type_id = pt.id
+        WHERE p.vendor_id = ?`;
+    const params = [vendorId];
+
+    if (status && status !== 'all') {
+      query += ' AND p.status = ?';
+      params.push(status);
+    }
+
+    query += ' ORDER BY p.created_at DESC';
+    const [rows] = await pool.execute(query, params);
+    return rows;
+  }
+
+  static async findSoldPartsByVendor(vendorId) {
     const [rows] = await pool.execute(
-      `SELECT p.*, b.name as brand_name, pt.name as part_type_name
-       FROM parts p
-       LEFT JOIN brands b ON p.brand_id = b.id
-       LEFT JOIN part_types pt ON p.part_type_id = pt.id
-       WHERE p.vendor_id = ? AND p.status = 'available'
-       ORDER BY p.created_at DESC`,
+      `SELECT 
+        r.id as request_id,
+        r.status as order_status,
+        r.delivery_type,
+        r.delivery_fee,
+        r.total_amount,
+        r.verified_barcode,
+        r.verified_at,
+        r.created_at as order_created_at,
+        p.id as part_id,
+        p.model_name,
+        p.price as part_price,
+        p.condition_type,
+        p.image_url,
+        p.original_photo_url,
+        p.barcode_number,
+        b.name as brand_name,
+        pt.name as part_type_name,
+        u_cust.name as customer_name,
+        u_cust.phone as customer_phone,
+        u_cust.email as customer_email,
+        c.city as customer_city
+      FROM requests r
+      JOIN parts p ON r.part_id = p.id
+      LEFT JOIN brands b ON p.brand_id = b.id
+      LEFT JOIN part_types pt ON p.part_type_id = pt.id
+      JOIN customers c ON r.customer_id = c.id
+      JOIN users u_cust ON c.user_id = u_cust.id
+      WHERE r.vendor_id = ? AND (r.status = 'delivered' OR r.verified_at IS NOT NULL)
+      ORDER BY r.verified_at DESC, r.created_at DESC`,
       [vendorId]
     );
     return rows;
@@ -161,10 +203,11 @@ class PartModel {
         COUNT(rv.id) as review_count
       FROM parts p
       JOIN vendors v ON p.vendor_id = v.id
+      JOIN users u ON v.user_id = u.id
       LEFT JOIN brands b ON p.brand_id = b.id
       LEFT JOIN part_types pt ON p.part_type_id = pt.id
       LEFT JOIN reviews rv ON rv.vendor_id = v.id
-      WHERE p.id = ?
+      WHERE p.id = ? AND u.status != 'blocked'
       GROUP BY p.id, b.id, pt.id, v.id`,
       [partId]
     );
@@ -172,7 +215,7 @@ class PartModel {
   }
 
   static async search({ brandId, partTypeId, model, city }) {
-    const conditions = ["v.verification_status = 'approved'", "p.status = 'available'"];
+    const conditions = ["v.verification_status = 'approved'", "p.status = 'available'", "u.status != 'blocked'"];
     const values = [];
 
     if (brandId) {
@@ -205,6 +248,7 @@ class PartModel {
         COUNT(rv.id) as review_count
       FROM parts p
       JOIN vendors v ON p.vendor_id = v.id
+      JOIN users u ON v.user_id = u.id
       LEFT JOIN brands b ON p.brand_id = b.id
       LEFT JOIN part_types pt ON p.part_type_id = pt.id
       LEFT JOIN reviews rv ON rv.vendor_id = v.id

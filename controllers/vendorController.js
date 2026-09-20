@@ -1,5 +1,6 @@
-﻿const UserModel = require('../models/UserModel');
+const UserModel = require('../models/UserModel');
 const VendorModel = require('../models/VendorModel');
+const PartModel = require('../models/PartModel');
 
 /**
  * Gets the profile of the logged-in vendor.
@@ -116,8 +117,33 @@ async function submitSecurityDepositProof(req, res, next) {
   }
 }
 
+/**
+ * Gets verified sold parts history for the logged-in vendor.
+ */
+async function getMySoldParts(req, res, next) {
+  try {
+    const userId = req.user.id;
+    const vendor = await VendorModel.findByUserId(userId);
+    if (!vendor) {
+      res.status(404);
+      throw new Error('Vendor profile not found');
+    }
+
+    const soldParts = await PartModel.findSoldPartsByVendor(vendor.id);
+
+    res.json({
+      success: true,
+      count: soldParts.length,
+      data: soldParts
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   getMyProfile,
   updateMyProfile,
-  submitSecurityDepositProof
+  submitSecurityDepositProof,
+  getMySoldParts
 };

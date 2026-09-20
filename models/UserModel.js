@@ -82,6 +82,26 @@ class UserModel {
     return result.affectedRows > 0;
   }
 
+  static async updateBasicInfo(id, { name, phone }) {
+    const updates = [];
+    const values = [];
+
+    if (name !== undefined && name !== null) {
+      updates.push('name = ?');
+      values.push(name.trim());
+    }
+    if (phone !== undefined && phone !== null) {
+      updates.push('phone = ?');
+      values.push(phone.trim());
+    }
+
+    if (updates.length > 0) {
+      values.push(id);
+      await pool.execute(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, values);
+    }
+    return this.findById(id);
+  }
+
   static async getAdminUsers() {
     const [rows] = await pool.execute("SELECT id FROM users WHERE role = 'admin'");
     return rows;

@@ -1,4 +1,4 @@
-﻿const PartModel = require('../models/PartModel');
+const PartModel = require('../models/PartModel');
 const VendorModel = require('../models/VendorModel');
 const RequestModel = require('../models/RequestModel');
 
@@ -34,23 +34,14 @@ async function addPart(req, res, next) {
       ? barcode_number.trim()
       : null;
 
-    const isQrType = code_type === 'qr' || (cleanBarcode && (cleanBarcode.toLowerCase().startsWith('qr') || cleanBarcode.includes(':') || cleanBarcode.length > 20));
-
-    if (!isQrType && (!cleanBarcode || cleanBarcode === '')) {
-      return res.status(400).json({
-        success: false,
-        message: 'Barcode number is strictly required when listing a Barcode product.'
-      });
-    }
-
     if (!cleanBarcode) {
-      // Auto-generate unique QR Code Token for QR products
-      cleanBarcode = `QR-PART-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
+      // Auto-generate unique Authenticity / QR Token for standard/used products without OEM barcode
+      cleanBarcode = `PPF-${Date.now().toString(36).toUpperCase()}-${Math.floor(100 + Math.random() * 900)}`;
     }
 
-    if (!req.files || !req.files['originalPhoto'] || !req.files['barcodePhoto']) {
+    if (!req.files || !req.files['originalPhoto']) {
       res.status(400);
-      throw new Error('Required authenticity files missing: originalPhoto and barcodePhoto must be uploaded');
+      throw new Error('Part photo (originalPhoto) must be uploaded');
     }
 
     if (cleanBarcode) {
@@ -66,10 +57,13 @@ async function addPart(req, res, next) {
     }
 
     const originalPhotoFile = req.files['originalPhoto'][0];
-    const barcodePhotoFile = req.files['barcodePhoto'][0];
-
     const original_photo_url = `/uploads/parts/${originalPhotoFile.filename}`;
-    const barcode_photo_url = `/uploads/parts/${barcodePhotoFile.filename}`;
+    
+    // If vendor provided a separate barcode photo, use it; otherwise fallback to the part photo
+    const barcodePhotoFile = req.files['barcodePhoto'] ? req.files['barcodePhoto'][0] : null;
+    const barcode_photo_url = barcodePhotoFile 
+      ? `/uploads/parts/${barcodePhotoFile.filename}`
+      : original_photo_url;
 
     const createdPart = await PartModel.create({
       vendorId: vendor.id,

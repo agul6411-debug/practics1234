@@ -1,4 +1,4 @@
-﻿const UserModel = require('../models/UserModel');
+const UserModel = require('../models/UserModel');
 const CustomerModel = require('../models/CustomerModel');
 
 /**
@@ -42,7 +42,7 @@ async function getMyProfile(req, res, next) {
 }
 
 /**
- * Updates the city for the logged-in customer.
+ * Updates profile info (name, phone, city) for the logged-in customer.
  */
 async function updateMyProfile(req, res, next) {
   try {
@@ -55,18 +55,33 @@ async function updateMyProfile(req, res, next) {
       throw new Error('Customer profile not found');
     }
 
-    const { city } = req.body;
-    if (!city) {
-      res.status(400);
-      throw new Error('City is required');
+    const { name, phone, city } = req.body;
+
+    if (name !== undefined || phone !== undefined) {
+      await UserModel.updateBasicInfo(userId, { name, phone });
     }
 
-    const updatedProfile = await CustomerModel.updateCity(userId, city);
+    if (city && city.trim() !== '') {
+      await CustomerModel.updateCity(userId, city.trim());
+    }
+
+    const user = await UserModel.findById(userId);
+    const updatedCustomer = await CustomerModel.findByUserId(userId);
 
     res.json({
       success: true,
       message: 'Customer profile updated successfully',
-      data: updatedProfile
+      data: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+        status: user.status,
+        customer_id: updatedCustomer.id,
+        city: updatedCustomer.city,
+        created_at: updatedCustomer.created_at
+      }
     });
   } catch (error) {
     next(error);
