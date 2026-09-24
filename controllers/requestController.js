@@ -483,37 +483,11 @@ async function cancelRequestByVendor(req, res, next) {
     // 2. Restore Part Stock Quantity
     await PartModel.restoreStock(request.part_id);
 
-    // 3. Increment Vendor Cancellation Counter
+    // 3. Increment Vendor Cancellation Counter for analytics/tracking
     const updatedVendor = await VendorModel.incrementCancellationCount(vendor.id);
     const newCancelCount = updatedVendor.cancellation_count || 1;
 
-    let maxLimit = 3;
-    try {
-      const val = await SystemSettingModel.getSettingValue('max_vendor_cancellations');
-      if (val && !isNaN(val)) {
-        maxLimit = parseInt(val, 10);
-      }
-    } catch (_) {}
-
-    const isAutoBlocked = newCancelCount >= maxLimit;
-
-    // 4. Auto-block Vendor if cancellation count reaches limit (3 or 4)
-    if (isAutoBlocked) {
-      await UserModel.updateStatus(vendor.user_id, 'blocked');
-
-      try {
-        await NotificationModel.create({
-          userId: vendor.user_id,
-          message: `🚨 ACCOUNT AUTOMATICALLY BLOCKED: Your vendor account has been blocked because you cancelled ${newCancelCount} orders (Cancellation Limit: ${maxLimit}). Reason: Exceeded online order cancellation limit.`,
-          type: 'system',
-          isRead: 0
-        });
-      } catch (notifErr) {
-        console.error('Failed to notify vendor of auto-block:', notifErr.message);
-      }
-    }
-
-    // 5. Notify Customer about cancellation
+    // 4. Notify Customer about cancellation
     try {
       const customerRecord = await CustomerModel.findById(request.customer_id);
       const part = await PartModel.findById(request.part_id);
@@ -531,15 +505,13 @@ async function cancelRequestByVendor(req, res, next) {
       console.error('Customer notification failed on cancellation:', notifErr.message);
     }
 
-    // 6. Notify All Admins about Vendor Cancellation & Auto-Block Status
+    // 5. Notify All Admins about Vendor Cancellation log
     try {
       const adminUsers = await UserModel.getAdminUsers();
       const part = await PartModel.findById(request.part_id);
       const partModelName = part ? part.model_name : 'product';
 
-      const adminMsg = isAutoBlocked
-        ? `🚨 VENDOR AUTO-BLOCKED: Vendor '${updatedVendor.shop_name}' (ID: ${vendor.id}) cancelled Order #${requestId} (${partModelName}) and was AUTOMATICALLY BLOCKED after reaching ${newCancelCount}/${maxLimit} order cancellations!`
-        : `⚠️ ORDER CANCELLED BY VENDOR: Vendor '${updatedVendor.shop_name}' cancelled Order #${requestId} (${partModelName}). Reason: ${cancelReason}. Vendor total cancellations: ${newCancelCount}/${maxLimit}.`;
+      const adminMsg = `⚠️ ORDER CANCELLED BY VENDOR: Vendor '${updatedVendor.shop_name}' cancelled Order #${requestId} (${partModelName}). Reason: ${cancelReason}.`;
 
       for (const adminUser of adminUsers) {
         await NotificationModel.create({
@@ -555,11 +527,9 @@ async function cancelRequestByVendor(req, res, next) {
 
     res.json({
       success: true,
-      is_auto_blocked: isAutoBlocked,
+      is_auto_blocked: false,
       cancellation_count: newCancelCount,
-      message: isAutoBlocked
-        ? `Order cancelled. 🚨 WARNING: Your account has been AUTOMATICALLY BLOCKED due to reaching the cancellation limit of ${maxLimit} orders.`
-        : `Order cancelled successfully. Total vendor cancellations: ${newCancelCount}/${maxLimit}.`,
+      message: 'Order cancelled successfully. Part stock restored to inventory.',
       data: { id: parseInt(requestId, 10), status: 'cancelled', cancellation_count: newCancelCount }
     });
   } catch (error) {
